@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL support
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Local configuration files
+.env
+.env.local
+
+# Sensitive data / raw input files (good practice to avoid committing raw data)
+# files/  <- We can keep it commented or uncommented depending on whether we want to track files locally,
+# but since the prompt says "the code must be local", we will track git locally.
+# Let's ignore any output text/markdown results or temporary files.
+*.txt
+!requirements.txt
+*.md
+!README.md
+!data_dictionary.md
