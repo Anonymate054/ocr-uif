@@ -3,7 +3,8 @@ import re
 import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.calibration import CalibratedClassifierCV
 import joblib
 
 def main():
@@ -13,20 +14,23 @@ def main():
         
     df_matched = pd.read_parquet(parquet_path)
     
-    print("Training the winner model (TF-IDF + Logistic Regression) on matched data...")
+    print("Training the champion model (TF-IDF + Linear SVM) on matched data...")
     X_train_text = df_matched["extracted_text"].values
     y_train = df_matched["label_movement"].values
     
     vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
     X_train_vec = vectorizer.fit_transform(X_train_text)
     
-    clf = LogisticRegression(class_weight="balanced", random_state=42)
+    # Use Linear SVM wrapped in CalibratedClassifierCV for clean probability calibration
+    base_clf = SVC(kernel="linear", class_weight="balanced", random_state=42)
+    clf = CalibratedClassifierCV(base_clf, ensemble=False)
     clf.fit(X_train_vec, y_train)
     
     # Save the trained model and vectorizer
     os.makedirs("models", exist_ok=True)
     joblib.dump(vectorizer, "models/tfidf_vectorizer.joblib")
-    joblib.dump(clf, "models/logistic_regression_model.joblib")
+    joblib.dump(clf, "models/svm_classifier_model.joblib")
+    print("Model saved to models/ directory.")
     
     # Now scan the directory for ALL 116 PDFs and fetch their text from transcriptions/ cache
     print("\nScanning for all PDFs in workspace...")
