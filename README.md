@@ -72,22 +72,50 @@ The project includes an automated, offline-ready Windows executable build pipeli
 ### Prerequisites
 * **Docker** installed and running on your system (Linux/macOS/Windows).
 
-### Compilation Steps
-To build the Windows executable:
+### Compilation Options
+
+You can build the executable in two ways: **natively on a Windows machine** (recommended if you have access to one) or **cross-compiling on Linux/macOS** using Docker.
+
+#### Option A: Native Compilation on a Windows Machine (Recommended)
+If you are compiling directly on a Windows computer, you do not need Docker or Wine. Open Command Prompt (`cmd`) or PowerShell in the project directory and run:
+
+1. **Install dependencies offline** from the local wheel storage:
+   ```cmd
+   pip install --no-index --find-links=windows_wheels flet pymupdf rapidocr-onnxruntime scikit-learn pandas numpy joblib opencv-python pyinstaller flet-cli flet-desktop
+   ```
+
+2. **Generate the initial Spec configuration** using Flet Pack pointing to the local offline client:
+   ```cmd
+   set FLET_CLIENT_URL=file:///%CD%/flet-windows.zip
+   flet pack ui/app.py --add-data models;models --add-data ui/assets;ui/assets --name OCR-UIF
+   ```
+
+3. **Inject the RapidOCR ONNX model files** and Flet assets into the `.spec` file:
+   ```cmd
+   python modify_spec.py
+   ```
+
+4. **Compile the final production standalone executable** with PyInstaller:
+   ```cmd
+   python -m PyInstaller --clean -y OCR-UIF.spec
+   ```
+
+#### Option B: Cross-Compiling on Linux/macOS (via Docker & Wine)
+If you are on a Linux or macOS machine, the process is fully automated using Docker:
+
 1. Run the local build script:
    ```bash
    bash build_windows_exe.sh
    ```
 2. **What the script does under the hood**:
-   * Launches a Docker container with the Wine emulation environment (`mymi14s/ubuntu-wine:24.04-3.11`).
+   * Launches a Docker container running Wine (`mymi14s/ubuntu-wine:24.04-3.11`).
    * Installs Python packages offline using the local dependencies cached in `windows_wheels/`.
    * Packages the initial bundle using `flet pack` and caches Flet's offline client archive (`flet-windows.zip`).
    * Programmatically edits the generated `.spec` file via `modify_spec.py` to inject the RapidOCR ONNX model files and the offline Flet client zip.
    * Compiles the final production standalone executable using PyInstaller.
 
-3. **Output**:
-   * The finalized executable is written to `dist/OCR-UIF.exe`.
-   * Copy it to the `OCR-UIF-Release/` directory for portable client deployment.
+### Output
+The finalized executable is written to `dist/OCR-UIF.exe` in both options. Copy it to the `OCR-UIF-Release/` directory for portable client deployment.
 
 ---
 
