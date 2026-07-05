@@ -65,6 +65,32 @@ python -m ui.app
 
 ---
 
+## 📦 Compiling to Windows (.exe)
+
+The project includes an automated, offline-ready Windows executable build pipeline. It compiles the Python source code into a single, standalone `OCR-UIF.exe` using a Wine-based Docker container to emulate Windows.
+
+### Prerequisites
+* **Docker** installed and running on your system (Linux/macOS/Windows).
+
+### Compilation Steps
+To build the Windows executable:
+1. Run the local build script:
+   ```bash
+   bash build_windows_exe.sh
+   ```
+2. **What the script does under the hood**:
+   * Launches a Docker container with the Wine emulation environment (`mymi14s/ubuntu-wine:24.04-3.11`).
+   * Installs Python packages offline using the local dependencies cached in `windows_wheels/`.
+   * Packages the initial bundle using `flet pack` and caches Flet's offline client archive (`flet-windows.zip`).
+   * Programmatically edits the generated `.spec` file via `modify_spec.py` to inject the RapidOCR ONNX model files and the offline Flet client zip.
+   * Compiles the final production standalone executable using PyInstaller.
+
+3. **Output**:
+   * The finalized executable is written to `dist/OCR-UIF.exe`.
+   * Copy it to the `OCR-UIF-Release/` directory for portable client deployment.
+
+---
+
 ## 📊 Extraction Sandbox Results (Benchmarked)
 
 Using a sample scanned PDF document (containing 2 pages and 0 digital selectable characters), the extraction pipeline achieved the following performance metrics during benchmarking:
