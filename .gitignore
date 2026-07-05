@@ -1,10 +1,27 @@
+# Python Virtual Environment
 .venv/
+__pycache__/
+*.pyc
+
+# Local Data and Caches (Sensitive UIF Data)
 files/
 transcriptions/
-local_models/
-models/
+
+# Large binaries & packaging outputs
+OCR-UIF-Release/OCR-UIF.exe
+OCR-UIF-Release/debug_report.txt
+OCR-UIF-Release/debug_paths.txt
+build/
+dist/
+flet-windows.zip
+windows_wheels/
+pyinstaller_out.log
+
+# Development / R&D Sandbox (Ignored in Git)
+old/
+
+# Temporary / Output Data files
 *.parquet
 *.csv
 *.json
-__pycache__/
 .ipynb_checkpoints/

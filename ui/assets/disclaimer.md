@@ -1,0 +1,8 @@
+# AVISO LEGAL Y DESCARGO DE RESPONSABILIDAD
+
+El uso de este software está sujeto a las siguientes condiciones y restricciones:
+
+1. **Uso Exclusivo:** El uso de este software está restringido únicamente al personal autorizado. Toda la información procesada tiene carácter de estrictamente confidencial.
+2. **Distribución de Datos (Alta vs. Baja):** De acuerdo a los datos históricos procesados, se observa que existen más datos de alta que de baja. Por lo tanto, **se recomienda revisar con especial detalle y minuciosidad aquellos registros que son clasificados y registrados como BAJA**.
+3. **Validación Obligatoria:** Esta aplicación es únicamente una herramienta de apoyo para el procesamiento y extracción automatizada de información. Los resultados generados son de carácter preliminar y predictivo. Es responsabilidad absoluta del usuario validar y verificar de manera manual la exactitud, integridad y veracidad de todos los resultados antes de cualquier uso oficial, reporte o toma de decisiones.
+4. **Exclusión de Responsabilidad (Limitación de Responsabilidad):** El software se proporciona "TAL CUAL" (As Is), sin garantía de ningún tipo, expresa o implícita, incluyendo, pero no limitado a, las garantías de precisión o fiabilidad de los datos. En ningún caso los desarrolladores, autores o la institución serán responsables de cualquier reclamo, daño o perjuicio directo, indirecto, incidental o consecuente resultante del uso, la exactitud de los resultados o la imposibilidad de usar esta herramienta. La responsabilidad final por las acciones tomadas con base en la información procesada recae enteramente en la persona física o moral que opera el software.
