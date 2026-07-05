@@ -153,8 +153,38 @@ The backend (implemented in `ui/pipeline.py`) uses a two-stage hybrid architectu
 * **How it works:**
   * **Feature Extraction:** Reconstructed text is processed by a **TF-IDF Vectorizer** (`models/tfidf_vectorizer.joblib`) to extract word and bigram patterns.
   * **Prediction:** A pre-trained **Support Vector Machine (SVM) Classifier** (`models/svm_classifier_model.joblib`) analyzes the text features.
-  * **Output Prediction:** The model predicts whether the processed document represents an official registry registration/addition (**alta**) or deregistration/removal (**baja**).
   * **Validation Benchmarks:** During test evaluations, the SVM classifier achieved **100% classification accuracy** (perfect precision and recall), ensuring absolute reliability in document status determination.
+
+##### NLP Classification Model Benchmarks & Strategies
+
+To select the most robust classification strategy for identifying register additions (**alta**) versus deregistrations (**baja**), we evaluated five different strategies using a 5-fold cross-validation scheme on our evaluation dataset (115 documents):
+
+| Classification Strategy | Mean CV Accuracy | Mean F1 Score (Macro) | Avg Fit Time (s) | Verdict / Selection |
+| :--- | :---: | :---: | :---: | :---: |
+| **TF-IDF + Linear SVM** | **100.00% ± 0.00%** | **1.0000 ± 0.0000** | **~0.171s** | 🏆 **Champion (Best precision, fast, stable)** |
+| **TF-IDF + Logistic Regression** | 99.13% ± 1.74% | 0.9832 ± 0.0337 | ~0.153s | Runner-Up (Missed 1 "baja" class) |
+| **Rule-Based Regex** | 83.48% ± 1.74% | 0.5274 ± 0.0931 | < 0.002s | Poor (Misses context/semantic variations) |
+| **TF-IDF + Naive Bayes** | 81.74% ± 1.74% | 0.4497 ± 0.0053 | ~0.103s | Failed (Biased towards majority class) |
+| **Semantic Embeddings + SVM** | 70.43% ± 14.39% | 0.5456 ± 0.1362 | ~0.009s | Unstable (High variance on short text blocks) |
+
+##### Confusion Matrices & Error Analysis
+
+* **🏆 TF-IDF + Linear SVM (Selected Champion)**
+  Perfect separation of classes; successfully flags all edge cases:
+  ```text
+                        Predicted ALTA    Predicted BAJA
+  Actual ALTA (94)            94                 0
+  Actual BAJA (21)             0                21
+  ```
+
+* **TF-IDF + Logistic Regression (Runner-Up)**
+  Slightly less confident on boundary cases; misclassified one "baja" document as "alta":
+  ```text
+                        Predicted ALTA    Predicted BAJA
+  Actual ALTA (94)            94                 0
+  Actual BAJA (21)             1                20
+  ```
+
 
 #### 3. Stage 3: Entity Extractor & Name Standardizer
 * **How it works:**
