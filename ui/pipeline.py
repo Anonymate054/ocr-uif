@@ -62,6 +62,7 @@ def _transcriptions_dir() -> Path:
 def run_ocr(
     pdf_folder: str,
     progress_cb: ProgressCallback,
+    cancel_event: threading.Event = None,
 ) -> List[Tuple[str, str]]:
     """
     Scan *pdf_folder* recursively for PDF files, run RapidOCR on page 1,
@@ -99,6 +100,8 @@ def run_ocr(
     lock = threading.Lock()
 
     def process_single_pdf(filename, path):
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Proceso cancelado")
         nonlocal completed
         basename = Path(filename).stem
         cache_path = trans_dir / f"{basename}.txt"
@@ -146,12 +149,16 @@ def run_ocr(
             )
         return filename, text
 
-    # Set worker count to the maximum available CPU cores
-    num_workers = os.cpu_count() or 2
+    # Set worker count to 80% of available CPU cores (minimum of 1)
+    num_workers = max(1, int((os.cpu_count() or 2) * 0.8))
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {executor.submit(process_single_pdf, fn, p): fn for fn, p in pdf_files}
         for future in as_completed(futures):
+            if cancel_event and cancel_event.is_set():
+                for f in futures:
+                    f.cancel()
+                raise RuntimeError("Proceso cancelado")
             fn, text = future.result()
             results_dict[fn] = text
 
@@ -232,6 +239,7 @@ def run_output(
     output_folder: str,
     progress_cb: ProgressCallback,
     pdf_folder: str = None,
+    cancel_event: threading.Event = None,
 ) -> List[str]:
     """
     For every (filename, text) in *ocr_results*:
@@ -335,6 +343,8 @@ def run_output(
     total = len(ocr_results)
 
     for idx, (filename, text) in enumerate(ocr_results):
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Proceso cancelado")
         progress_cb(
             idx / total if total else 1.0,
             f"[{idx+1}/{total}] Generating CSV for {filename}…",
@@ -381,6 +391,7 @@ def run_full_pipeline(
     pdf_folder: str,
     output_folder: str,
     progress_cb: ProgressCallback,
+    cancel_event: threading.Event = None,
 ) -> List[str]:
     """
     Run OCR → NLP/Model → Output in sequence.
@@ -395,12 +406,18 @@ def run_full_pipeline(
         return cb
 
     # Phase 1: OCR (0% → 40%)
-    ocr_results = run_ocr(pdf_folder, phase_cb(0.0, 0.4))
+    ocr_results = run_ocr(pdf_folder, phase_cb(0.0, 0.4), cancel_event)
+
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Proceso cancelado")
 
     # Phase 2: Model (40% → 65%)
     vectorizer, clf = run_nlp_and_predict(ocr_results, phase_cb(0.4, 0.65))
 
+    if cancel_event and cancel_event.is_set():
+        raise RuntimeError("Proceso cancelado")
+
     # Phase 3: Output (65% → 100%)
-    written = run_output(ocr_results, vectorizer, clf, output_folder, phase_cb(0.65, 1.0), pdf_folder)
+    written = run_output(ocr_results, vectorizer, clf, output_folder, phase_cb(0.65, 1.0), pdf_folder, cancel_event)
 
     return written

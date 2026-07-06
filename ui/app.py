@@ -124,6 +124,7 @@ async def main(page: ft.Page) -> None:
     # ── State ────────────────────────────────────────────────────────────────
     input_folder:  list[str] = [""]
     output_folder: list[str] = [""]
+    cancel_event = threading.Event()
 
     # ── Path display fields (read-only TextField — users cannot type) ─────────
     tf_input = ft.TextField(
@@ -198,6 +199,30 @@ async def main(page: ft.Page) -> None:
         width=150,
     )
 
+    # ── Cancel button ─────────────────────────────────────────────────────────
+    btn_cancel = ft.TextButton(
+        content=ft.Text("Cancelar", color=ERROR, size=12, weight=ft.FontWeight.W_500),
+        visible=False,
+    )
+
+    # ── Exit button ───────────────────────────────────────────────────────────
+    btn_exit = ft.OutlinedButton(
+        content=ft.Row(
+            controls=[
+                ft.Icon(ft.Icons.EXIT_TO_APP_ROUNDED, color=TEXT, size=15),
+                ft.Text("Salir", color=TEXT, size=13, weight=ft.FontWeight.W_600),
+            ],
+            spacing=8,
+            tight=True,
+        ),
+        style=ft.ButtonStyle(
+            shape=ft.RoundedRectangleBorder(radius=10),
+            side=ft.BorderSide(1, BORDER),
+        ),
+        height=42,
+        width=120,
+    )
+
     # ── File pickers ──────────────────────────────────────────────────────────
     pick_in  = ft.FilePicker()
     pick_out = ft.FilePicker()
@@ -270,6 +295,21 @@ async def main(page: ft.Page) -> None:
     async def _refresh() -> None:
         page.update()
 
+    async def _on_cancel(_) -> None:
+        cancel_event.set()
+        file_lbl.value = "Cancelando..."
+        sub_lbl.value = ""
+        btn_cancel.visible = False
+        page.update()
+
+    async def _on_exit(_) -> None:
+        import os
+        page.window.destroy()
+        os._exit(0)
+
+    btn_cancel.on_click = lambda e: page.run_task(_on_cancel, e)
+    btn_exit.on_click = lambda e: page.run_task(_on_exit, e)
+
     async def _on_run(_) -> None:
         if not input_folder[0]:
             file_lbl.value = "⚠  Selecciona la carpeta de PDFs"
@@ -282,17 +322,20 @@ async def main(page: ft.Page) -> None:
             page.update()
             return
 
-        btn_run.disabled    = True
+        btn_run.disabled      = True
+        btn_exit.disabled     = True
+        btn_cancel.visible    = True
         progress_ring.visible = True
         check_icon.visible    = False
         error_icon.visible    = False
         file_lbl.value        = "Iniciando…"
         sub_lbl.value         = ""
+        cancel_event.clear()
         page.update()
 
         def _work() -> None:
             try:
-                run_full_pipeline(input_folder[0], output_folder[0], _progress_cb)
+                run_full_pipeline(input_folder[0], output_folder[0], _progress_cb, cancel_event)
                 page.run_task(_set_done)
             except Exception as exc:
                 page.run_task(_set_error, str(exc))
@@ -301,6 +344,8 @@ async def main(page: ft.Page) -> None:
 
     async def _set_done() -> None:
         btn_run.disabled      = False
+        btn_exit.disabled     = False
+        btn_cancel.visible    = False
         progress_ring.visible = False
         check_icon.visible    = True
         file_lbl.value        = "Proceso completado"
@@ -309,10 +354,18 @@ async def main(page: ft.Page) -> None:
 
     async def _set_error(msg: str) -> None:
         btn_run.disabled      = False
+        btn_exit.disabled     = False
+        btn_cancel.visible    = False
         progress_ring.visible = False
-        error_icon.visible    = True
-        file_lbl.value        = "Error al procesar"
-        sub_lbl.value         = str(msg)[:80]
+        if "Proceso cancelado" in msg:
+            check_icon.visible = False
+            error_icon.visible = False
+            file_lbl.value     = "Proceso cancelado"
+            sub_lbl.value      = ""
+        else:
+            error_icon.visible = True
+            file_lbl.value     = "Error al procesar"
+            sub_lbl.value      = str(msg)[:80]
         page.update()
 
     btn_run.on_click = lambda e: page.run_task(_on_run, e)
@@ -417,6 +470,7 @@ async def main(page: ft.Page) -> None:
                 ),
                 file_lbl,
                 sub_lbl,
+                btn_cancel,
             ],
         ),
     )
@@ -437,8 +491,9 @@ async def main(page: ft.Page) -> None:
                 input_card,
                 proc_area,
                 ft.Row(
-                    controls=[btn_run],
+                    controls=[btn_run, btn_exit],
                     alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=12,
                 ),
             ],
         ),
