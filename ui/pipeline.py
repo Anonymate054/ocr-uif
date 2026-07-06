@@ -65,20 +65,23 @@ def run_ocr(
 ) -> List[Tuple[str, str]]:
     """
     Scan *pdf_folder* recursively for PDF files, run RapidOCR on page 1,
-    and cache the text to the project-level transcriptions/ directory.
+    and cache the text to the project-level transcriptions/ directory in parallel.
 
     Returns a list of (pdf_filename, transcription_text) tuples.
     """
     import fitz  # PyMuPDF
     import cv2
     from rapidocr_onnxruntime import RapidOCR
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     trans_dir = _transcriptions_dir()
     trans_dir.mkdir(parents=True, exist_ok=True)
 
     # Collect PDFs
     pdf_files: List[Tuple[str, Path]] = []
-    for root, _, files in os.walk(pdf_folder):
+    for root, ds, files in os.walk(pdf_folder):
+        # Prune output and environment directories
+        ds[:] = [d for d in ds if d.lower() not in ["test", "dist", "build", "transcriptions", ".venv", ".git", "old"]]
         for f in files:
             if f.lower().endswith(".pdf"):
                 pdf_files.append((f, Path(root) / f))
@@ -90,47 +93,70 @@ def run_ocr(
     progress_cb(0.0, f"Initializing RapidOCR — found {len(pdf_files)} PDF(s)…")
     ocr_engine = RapidOCR()
 
-    results: List[Tuple[str, str]] = []
+    results_dict = {}
     total = len(pdf_files)
+    completed = 0
+    lock = threading.Lock()
 
-    for idx, (filename, path) in enumerate(pdf_files):
+    def process_single_pdf(filename, path):
+        nonlocal completed
         basename = Path(filename).stem
         cache_path = trans_dir / f"{basename}.txt"
 
         if cache_path.exists():
             text = cache_path.read_text(encoding="utf-8")
-            progress_cb(
-                (idx + 1) / total,
-                f"[{idx+1}/{total}] Cached: {filename}",
-            )
-        else:
-            progress_cb(
-                idx / total,
-                f"[{idx+1}/{total}] OCR: {filename}…",
-            )
-            try:
-                doc = fitz.open(str(path))
-                page = doc[0]
-                pix = page.get_pixmap(dpi=96)
-                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-                    pix.h, pix.w, pix.n
-                )
-                if pix.n == 4:
-                    img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
-                elif pix.n == 1:
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-
-                res, _ = ocr_engine(img)
-                text = "\n".join([item[1] for item in res]) if res else ""
-                cache_path.write_text(text, encoding="utf-8")
-            except Exception as exc:
-                text = ""
+            with lock:
+                completed += 1
                 progress_cb(
-                    (idx + 1) / total,
+                    completed / total,
+                    f"[{completed}/{total}] Cached: {filename}",
+                )
+            return filename, text
+
+        try:
+            doc = fitz.open(str(path))
+            page = doc[0]
+            pix = page.get_pixmap(dpi=96)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.h, pix.w, pix.n
+            )
+            if pix.n == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+            elif pix.n == 1:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+
+            res, _ = ocr_engine(img)
+            text = "\n".join([item[1] for item in res]) if res else ""
+            cache_path.write_text(text, encoding="utf-8")
+        except Exception as exc:
+            text = ""
+            with lock:
+                completed += 1
+                progress_cb(
+                    completed / total,
                     f"  ✗ Error on {filename}: {exc}",
                 )
+            return filename, text
 
-        results.append((filename, text))
+        with lock:
+            completed += 1
+            progress_cb(
+                completed / total,
+                f"[{completed}/{total}] OCR: {filename}…",
+            )
+        return filename, text
+
+    # Set worker count proportional to CPU cores to optimize throughput without thrashing
+    num_workers = min(4, os.cpu_count() or 2)
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(process_single_pdf, fn, p): fn for fn, p in pdf_files}
+        for future in as_completed(futures):
+            fn, text = future.result()
+            results_dict[fn] = text
+
+    # Maintain the original order of the PDF files list
+    results = [(fn, results_dict[fn]) for fn, _ in pdf_files]
 
     progress_cb(1.0, f"✓ OCR complete — {len(results)} file(s) processed.")
     return results
@@ -205,6 +231,7 @@ def run_output(
     clf,
     output_folder: str,
     progress_cb: ProgressCallback,
+    pdf_folder: str = None,
 ) -> List[str]:
     """
     For every (filename, text) in *ocr_results*:
@@ -230,24 +257,42 @@ def run_output(
         root_dir = _get_project_root()
 
     csv_records: list = []
-    files_dir = root_dir / "files"
-    if files_dir.exists():
-        for r, _, fs in os.walk(str(files_dir)):
-            for f in fs:
-                if f.lower().endswith(".csv") and not f.startswith("consolidated"):
-                    try:
-                        with open(os.path.join(r, f), encoding="utf-8", errors="ignore") as fh:
-                            reader = csv.DictReader(fh)
-                            for row in reader:
-                                csv_records.append({
-                                    "nombre": row.get("NOMBRE", "").strip(),
-                                    "paterno": row.get("PATERNO", "").strip(),
-                                    "materno": row.get("MATERNO", "").strip(),
-                                    "movimiento": row.get("MOVIMIENTO", "").strip(),
-                                    "motivo": row.get("MOTIVO", "").strip(),
-                                })
-                    except Exception:
-                        pass
+    
+    # Collect candidate database directories
+    dirs_to_check = [
+        root_dir / "files",
+        root_dir.parent / "files",
+    ]
+    if pdf_folder:
+        dirs_to_check.append(Path(pdf_folder))
+        dirs_to_check.append(Path(pdf_folder).parent)
+    
+    # Keep track of loaded CSV files to avoid duplicates
+    loaded_files = set()
+    
+    for files_dir in dirs_to_check:
+        if files_dir.exists():
+            for r, ds, fs in os.walk(str(files_dir)):
+                # Prune directory search to avoid loading outputs or temp files
+                ds[:] = [d for d in ds if d.lower() not in ["test", "dist", "build", "transcriptions", ".venv", ".git", "old"]]
+                for f in fs:
+                    if f.lower().endswith(".csv") and not f.startswith("consolidated"):
+                        full_path = os.path.join(r, f)
+                        if full_path not in loaded_files:
+                            try:
+                                with open(full_path, encoding="utf-8", errors="ignore") as fh:
+                                    reader = csv.DictReader(fh)
+                                    for row in reader:
+                                        csv_records.append({
+                                            "nombre": row.get("NOMBRE", "").strip(),
+                                            "paterno": row.get("PATERNO", "").strip(),
+                                            "materno": row.get("MATERNO", "").strip(),
+                                            "movimiento": row.get("MOVIMIENTO", "").strip(),
+                                            "motivo": row.get("MOTIVO", "").strip(),
+                                        })
+                                loaded_files.add(full_path)
+                            except Exception:
+                                pass
 
     def _clean(s: str) -> str:
         return re.sub(r"[^A-Z0-9]+", "", str(s).upper())
@@ -356,6 +401,6 @@ def run_full_pipeline(
     vectorizer, clf = run_nlp_and_predict(ocr_results, phase_cb(0.4, 0.65))
 
     # Phase 3: Output (65% → 100%)
-    written = run_output(ocr_results, vectorizer, clf, output_folder, phase_cb(0.65, 1.0))
+    written = run_output(ocr_results, vectorizer, clf, output_folder, phase_cb(0.65, 1.0), pdf_folder)
 
     return written

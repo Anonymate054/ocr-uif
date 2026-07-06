@@ -31,8 +31,45 @@ def extract_name(text):
     # Reject list for generic legal terms
     rejects = ["DICHA PERSONA", "DICHAS PERSONAS", "LA QUEJOSA", "EL QUEJOSO", "LAS QUEJOSAS", "LOS QUEJOSOS", "EL ELIMINADO", "LOS ELIMINADOS", "LA SOCIEDAD", "LAS SOCIEDADES"]
     
+    # Heuristic to check if a name is actually a sentence or legal term
+    def is_invalid_name(name):
+        name_upper = name.upper()
+        invalid_keywords = [
+            "LISTA DE PERSONAS", "LISTA", "BLOQUEADAS", "CONGELACION", "ACTIVOS", "SANCIONES", 
+            "RESOLUCION", "ACUERDO", "OFICIO", "ELIMINACION", "CONGELAR", "BLOQUEAR",
+            "ESTADO ISLAMICO", "CONSEJO DE SEGURIDAD", "NACIONES UNIDAS", "JUICIO DE AMPARO",
+            "TRIBUNAL", "COLEGIADO", "JUZGADO", "DISTRITO", "REVISION", "PROHIBICION", "EMBARGO",
+            "DE VIAJAR", "ARMAS", "N.O", "MATERIA", "HACIENDA", "SECRETARIA"
+        ]
+        for kw in invalid_keywords:
+            if kw in name_upper:
+                return True
+        return False
+
+    # Common Spanish first names that get merged with the second name
+    def clean_ocr_name(name):
+        prefixes = ["JOSE", "MARIA", "JUAN", "LUIS", "ANA", "SAN"]
+        words = name.split()
+        cleaned_words = []
+        for w in words:
+            w_upper = w.upper()
+            split_done = False
+            for prefix in prefixes:
+                if w_upper.startswith(prefix) and len(w_upper) > len(prefix):
+                    rest = w[len(prefix):]
+                    if rest.isalpha():
+                        cleaned_words.append(w[:len(prefix)])
+                        cleaned_words.append(rest)
+                        split_done = True
+                        break
+            if not split_done:
+                cleaned_words.append(w)
+        return " ".join(cleaned_words)
+
     # 1. Try BAJA / Se elimina / Resolution sentences first (very precise regex patterns)
     patterns = [
+        # Se elimina de la Lista de Personas Bloqueadas a: <NAME>
+        r"elimina,?\s*(?:de\s+la\s+Lista\s+de\s+Personas\s+Bloqueadas\s+)?a\s*:\s*(?:\d\)\s*)?([a-zA-Z\s\n\.,_-]{3,120}?)(?:\n\n|\r|\n|;|,|\s*con\s*R\.?F\.?C\.?|\.)",
         # eliminacion de <NAME>, con RFC
         r"eliminaci[oó6]n,?\s*de\s*([a-zA-Z\s\n\.,_-]{3,120}?)(?:,|\s*con\s*R\.?F\.?C\.?|;|\s*de\s*la\s*Lista|\n\n)",
         # impuesta a <NAME>
@@ -58,8 +95,9 @@ def extract_name(text):
             name_cand = re.sub(r"[,;\.\s]+(?:con|de|la|R\.?F\.?C\.?|C\.?O\.?N\.?|con\s+R\.?F\.?C\.?)*$", "", name_cand, flags=re.IGNORECASE).strip()
             name_cand = re.sub(r"^[,\s\.]+", "", name_cand).strip()
             if len(name_cand.split()) >= 1:
-                if name_cand.upper() not in rejects:
-                    return name_cand.upper()
+                name_upper = name_cand.upper()
+                if name_upper not in rejects and not is_invalid_name(name_upper):
+                    return clean_ocr_name(name_upper)
                 
     # 2. Try table-based extraction (often in ALTA documents)
     for i, line in enumerate(lines):
@@ -92,8 +130,8 @@ def extract_name(text):
                 filtered = [l for l in name_lines if not (len(l.split()) == 1 and any(c.isdigit() for c in l))]
                 if filtered:
                     res_name = " ".join(filtered).upper()
-                    if res_name not in rejects:
-                        return res_name
+                    if res_name not in rejects and not is_invalid_name(res_name):
+                        return clean_ocr_name(res_name)
                     
     # 3. Fallback: find the first line in the text that is long, fully uppercase, and has no numbers
     skip_keywords = ["HACIENDA", "INTELI", "FINAN", "UNIDAD", "MEXICO", "RESOLU", "PRESENTE", "OFICIO", "DIREC", "GENERAL", "LISTA", "PERSONA", "BLOQ", "PROCED", "GARANT", "AUDIENCIA", "PAGINA"]
@@ -103,8 +141,8 @@ def extract_name(text):
             if any(k in line.upper() for k in skip_keywords):
                 continue
             res_name = line.upper()
-            if res_name not in rejects:
-                return res_name
+            if res_name not in rejects and not is_invalid_name(res_name):
+                return clean_ocr_name(res_name)
             
     return "N/A"
 

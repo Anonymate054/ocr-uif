@@ -14,10 +14,16 @@ import sys
 import os
 from pathlib import Path
 
-# DEBUG: Write targeted diagnostics report
+# DEBUG: Write targeted diagnostics report and redirect stdout/stderr
 try:
     exe_dir = Path(sys.executable).parent
     debug_file = exe_dir / "debug_report.txt"
+    log_file = exe_dir / "debug_log.txt"
+    
+    # Redirect stdout and stderr to debug_log.txt
+    sys.stdout = open(log_file, "w", encoding="utf-8", buffering=1)
+    sys.stderr = sys.stdout
+    
     with open(debug_file, "w", encoding="utf-8") as f:
         f.write(f"sys.frozen: {getattr(sys, 'frozen', False)}\n")
         if hasattr(sys, "_MEIPASS"):
