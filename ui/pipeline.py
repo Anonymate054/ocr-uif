@@ -146,8 +146,8 @@ def run_ocr(
             )
         return filename, text
 
-    # Set worker count proportional to CPU cores to optimize throughput without thrashing
-    num_workers = min(4, os.cpu_count() or 2)
+    # Set worker count to the maximum available CPU cores
+    num_workers = os.cpu_count() or 2
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {executor.submit(process_single_pdf, fn, p): fn for fn, p in pdf_files}
