@@ -84,21 +84,20 @@ If you are compiling directly on a Windows computer, you do not need Docker or W
    pip install --no-index --find-links=windows_wheels flet pymupdf rapidocr-onnxruntime scikit-learn pandas numpy joblib opencv-python pyinstaller flet-cli flet-desktop
    ```
 
-2. **Generate the initial Spec configuration** using Flet Pack pointing to the local offline client:
+2. **Package using Flet Pack** (includes models, assets, and RapidOCR data files):
    ```cmd
-   set FLET_CLIENT_URL=file:///%CD%/flet-windows.zip
-   flet pack ui/app.py --add-data models;models --add-data ui/assets;ui/assets --name OCR-UIF
+   flet pack ui/app.py ^
+     --name OCR-UIF ^
+     --add-data "models:models" ^
+     --add-data "ui/assets:ui/assets" ^
+     --add-data "%CONDA_PREFIX%\Lib\site-packages\rapidocr_onnxruntime:rapidocr_onnxruntime" ^
+     --product-name "OCR-UIF" ^
+     --file-version "1.0.0.0" ^
+     --product-version "1.0.0" ^
+     --onedir ^
+     --yes
    ```
-
-3. **Inject the RapidOCR ONNX model files** and Flet assets into the `.spec` file:
-   ```cmd
-   python modify_spec.py
-   ```
-
-4. **Compile the final production standalone executable** with PyInstaller:
-   ```cmd
-   python -m PyInstaller --clean -y OCR-UIF.spec
-   ```
+   > **Important:** The `--add-data rapidocr_onnxruntime` flag is required. RapidOCR resolves `config.yaml` and its ONNX model files relative to its own package directory at runtime. Without this flag the exe will crash with `FileExistsError: config.yaml does not exist`.
 
 #### Option B: Cross-Compiling on Linux/macOS (via Docker & Wine)
 If you are on a Linux or macOS machine, the process is fully automated using Docker:

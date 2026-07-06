@@ -6,11 +6,13 @@ __pycache__/
 # Local Data and Caches (Sensitive UIF Data)
 files/
 transcriptions/
+test/
 
 # Large binaries & packaging outputs
-OCR-UIF-Release/OCR-UIF.exe
+OCR-UIF-Release/OCR-UIF/
 OCR-UIF-Release/debug_report.txt
 OCR-UIF-Release/debug_paths.txt
+OCR-UIF-Release/transcriptions/
 build/
 dist/
 flet-windows.zip
