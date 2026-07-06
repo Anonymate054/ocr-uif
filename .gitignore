@@ -23,6 +23,8 @@ pyinstaller_out.log
 *.spec
 *.exe
 *.log
+run_test.py
+audit_bundle.py
 
 # Development / R&D Sandbox (Ignored in Git)
 old/
