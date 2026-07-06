@@ -14,6 +14,16 @@ import sys
 import os
 from pathlib import Path
 
+# Limit CPU core usage to at most 70% to avoid freezing other user processes
+# ONNX Runtime, OpenMP, and BLAS libraries read these variables during initialization
+cores_limit = max(1, int((os.cpu_count() or 2) * 0.70))
+os.environ["OMP_NUM_THREADS"] = str(cores_limit)
+os.environ["ONNXRUNTIME_NUM_THREADS"] = str(cores_limit)
+os.environ["OPENBLAS_NUM_THREADS"] = str(cores_limit)
+os.environ["MKL_NUM_THREADS"] = str(cores_limit)
+os.environ["VECLIB_MAXIMUM_THREADS"] = str(cores_limit)
+os.environ["NUMEXPR_NUM_THREADS"] = str(cores_limit)
+
 # DEBUG: Write targeted diagnostics report and redirect stdout/stderr
 try:
     exe_dir = Path(sys.executable).parent
@@ -244,6 +254,47 @@ async def main(page: ft.Page) -> None:
             output_folder[0] = path
             tf_output.value  = path
             page.update()
+
+    # ── Help dialog ───────────────────────────────────────────────────────────
+    async def _show_help(_) -> None:
+        async def _close(_) -> None:
+            dlg.open = False
+            page.update()
+
+        help_text = (
+            "Sigue estos sencillos pasos para procesar los documentos:\n\n"
+            "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
+            "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
+            "3. Haz clic en el botón 'Procesar' para iniciar la extracción.\n\n"
+            "4. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
+            "5. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
+        )
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Instrucciones de Uso", color=TEXT, size=15,
+                          weight=ft.FontWeight.W_600),
+            content=ft.Container(
+                width=420, height=220,
+                content=ft.Column(
+                    scroll=ft.ScrollMode.ADAPTIVE,
+                    controls=[
+                        ft.Text(help_text, color=TEXT, size=13, selectable=True)
+                    ],
+                ),
+            ),
+            bgcolor=SURFACE,
+            actions=[
+                ft.TextButton(
+                    content=ft.Text("Entendido", color=ACCENT, size=13),
+                    on_click=lambda e: page.run_task(_close, e),
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
 
     # ── Disclaimer dialog ─────────────────────────────────────────────────────
     async def _show_disclaimer(_) -> None:
@@ -506,6 +557,19 @@ async def main(page: ft.Page) -> None:
                 ft.Text(f"v · {APP_VERSION}", color=HINT, size=11),
                 ft.Row(
                     controls=[
+                        ft.Icon(ft.Icons.HELP_OUTLINE_ROUNDED, size=12, color=ACCENT),
+                        ft.TextButton(
+                            content=ft.Text(
+                                "Instrucciones",
+                                color=ACCENT,
+                                size=11,
+                                weight=ft.FontWeight.W_500,
+                                style=ft.TextStyle(decoration=ft.TextDecoration.UNDERLINE),
+                            ),
+                            on_click=lambda e: page.run_task(_show_help, e),
+                            style=ft.ButtonStyle(overlay_color=ft.Colors.TRANSPARENT),
+                        ),
+                        ft.VerticalDivider(width=10, color=BORDER),
                         ft.Icon(ft.Icons.INFO_OUTLINE_ROUNDED, size=12, color=ACCENT),
                         ft.TextButton(
                             content=ft.Text(
