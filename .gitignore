@@ -10,6 +10,8 @@ test/
 
 # Large binaries & packaging outputs
 OCR-UIF-Release/OCR-UIF/
+OCR-UIF-Release/OCR-UIF.exe
+OCR-UIF-Release/debug_log.txt
 OCR-UIF-Release/debug_report.txt
 OCR-UIF-Release/debug_paths.txt
 OCR-UIF-Release/transcriptions/
@@ -18,6 +20,9 @@ dist/
 flet-windows.zip
 windows_wheels/
 pyinstaller_out.log
+*.spec
+*.exe
+*.log
 
 # Development / R&D Sandbox (Ignored in Git)
 old/
