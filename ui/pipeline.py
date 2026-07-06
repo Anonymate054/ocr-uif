@@ -18,6 +18,17 @@ from __future__ import annotations
 
 import csv
 import os
+import sys
+
+# Limit CPU core usage to at most 70% to avoid freezing other user processes
+# ONNX Runtime, OpenMP, and BLAS libraries read these variables during initialization
+cores_limit = max(1, int((os.cpu_count() or 2) * 0.70))
+os.environ["OMP_NUM_THREADS"] = str(cores_limit)
+os.environ["ONNXRUNTIME_NUM_THREADS"] = str(cores_limit)
+os.environ["OPENBLAS_NUM_THREADS"] = str(cores_limit)
+os.environ["MKL_NUM_THREADS"] = str(cores_limit)
+os.environ["VECLIB_MAXIMUM_THREADS"] = str(cores_limit)
+os.environ["NUMEXPR_NUM_THREADS"] = str(cores_limit)
 import re
 import sys
 import threading
@@ -149,8 +160,8 @@ def run_ocr(
             )
         return filename, text
 
-    # Set worker count to 80% of available CPU cores (minimum of 1)
-    num_workers = max(1, int((os.cpu_count() or 2) * 0.8))
+    # Set worker count to 70% of available CPU cores (minimum of 1)
+    num_workers = max(1, int((os.cpu_count() or 2) * 0.70))
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {executor.submit(process_single_pdf, fn, p): fn for fn, p in pdf_files}
