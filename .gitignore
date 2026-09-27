@@ -5,6 +5,7 @@ __pycache__/
 
 # Local Data and Caches (Sensitive UIF Data)
 files/
+files.zip
 transcriptions/
 test/
 

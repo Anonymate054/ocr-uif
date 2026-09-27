@@ -64,7 +64,25 @@ def extract_name(text):
                         break
             if not split_done:
                 cleaned_words.append(w)
-        return " ".join(cleaned_words)
+        result = " ".join(cleaned_words)
+
+        # Standardize and clean corporate suffixes
+        sociedades = [
+            (r"\bS[\.\,\s]*A[\.\,\s]*P[\.\,\s]*I[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SAPI DE CV"),
+            (r"\bS[\.\,\s]*DE[\.\,\s]*R[\.\,\s]*L[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "S DE RL DE CV"),
+            (r"\bS[\.\,\s]*A[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SA DE CV"),
+            (r"\bS[\.\,\s]*A[\.\,\s]*S[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SAS DE CV"),
+            (r"\bS[\.\,\s]*C[\.\,\s]*(?:DE[\.\,\s]*)?R[\.\,\s]*L\b", "SC DE RL"),
+            (r"\bS[\.\,\s]*C\b", "SC"),
+            (r"\bA[\.\,\s]*C\b", "AC"),
+        ]
+        for pat, rep in sociedades:
+            result = re.sub(pat, rep, result, flags=re.IGNORECASE)
+
+        # Clean trailing punctuation and multiple spaces
+        result = re.sub(r"[\.\,\;\:\-\_\s]+$", "", result)
+        result = re.sub(r"^[\.\,\;\:\-\_\s]+", "", result)
+        return re.sub(r"\s+", " ", result).strip()
 
     # 1. Try BAJA / Se elimina / Resolution sentences first (very precise regex patterns)
     patterns = [
