@@ -164,43 +164,30 @@ def extract_name(text):
             
     return "N/A"
 
-def split_full_name(fullname, is_company):
+from ui.ner_segmenter import segment_entity_name
+
+def split_full_name(fullname, is_company=None):
+    """
+    Intelligently splits a full name into (Nombre, Paterno, Materno).
+    Leverages the trained CRF NER sequence tagger.
+    """
     if not fullname or fullname == "N/A":
         return "", "", ""
     
-    if is_company:
+    is_co, nombre, paterno, materno = segment_entity_name(fullname)
+    if is_company is True or is_co:
         return fullname, "", ""
     
-    # Split person name (Nombre, Paterno, Materno)
-    parts = fullname.split()
-    if len(parts) == 0:
-        return "", "", ""
-    elif len(parts) == 1:
-        return parts[0], "", ""
-    elif len(parts) == 2:
-        return parts[0], parts[1], ""
-    elif len(parts) == 3:
-        return parts[0], parts[1], parts[2]
-    else:
-        # 4 or more parts (e.g. JUAN ANTONIO ALISEDA ALCANTARA)
-        # Assume first two are Nombre, third is Paterno, fourth is Materno
-        return " ".join(parts[:-2]), parts[-2], parts[-1]
+    return nombre, paterno, materno
 
 def is_moral_entity(name):
-    # Heuristics to check if it is a company
-    company_keywords = [
-        "SA", "CV", "SC", "AC", "SAPI", "SOFOM", "SDR", "RL", "SOFIPO", "SNC", "GROUP", "GLOBAL",
-        "INDUSTRIAS", "ASOCIACION", "SINDICATO", "CORPORACION", "CLINICA", "PROYECTOS", "DESARROLLOS",
-        "EDIFICACIONES", "INNOVACION", "PATRONAL", "CONFEDERACION", "JURIDICA", "JURIDICO", "SERVICIOS",
-        "LOGISTICA", "MEDICINA", "TRANSPORTES", "CONSTRUCTORA", "PROGRESISTA", "COMPETITIVIDAD",
-        "COOPERATIVA", "BIENES", "INVERSIONES", "FINANCIERA", "ESTUDIOS", "DISTRIBUIDORA", "PRODUCTIVIDAD"
-    ]
-    name_upper = name.upper()
-    words = re.split(r"[_\-\s\.]+", name_upper)
-    for w in words:
-        if w in company_keywords:
-            return True
-    return False
+    """
+    Determines if an entity is a company / persona moral using the NER model.
+    """
+    if not name or name == "N/A":
+        return False
+    is_co, _, _, _ = segment_entity_name(name)
+    return is_co
 
 def main():
     # Load dataset

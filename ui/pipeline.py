@@ -105,9 +105,21 @@ def run_ocr(
     progress_cb(0.0, f"Initializing RapidOCR — found {len(pdf_files)} PDF(s)…")
     rec_model = _models_dir() / "en_PP-OCRv4_rec_infer.onnx"
     rec_dict = _models_dir() / "en_dict.txt"
-    if rec_model.exists() and rec_dict.exists():
-        ocr_engine = RapidOCR(rec_model_path=str(rec_model), rec_keys_path=str(rec_dict))
-    else:
+    try:
+        if rec_model.exists() and rec_dict.exists():
+            from rapidocr_onnxruntime.utils import UpdateParameters
+            _orig_update_rec = UpdateParameters.update_rec_params
+            def _patched_update_rec(self, config, rec_dict):
+                if rec_dict:
+                    for k in list(rec_dict.keys()):
+                        if k.startswith("rec_"):
+                            rec_dict[k.replace("rec_", "", 1)] = rec_dict[k]
+                return _orig_update_rec(self, config, rec_dict)
+            UpdateParameters.update_rec_params = _patched_update_rec
+            ocr_engine = RapidOCR(rec_model_path=str(rec_model), rec_keys_path=str(rec_dict))
+        else:
+            ocr_engine = RapidOCR()
+    except Exception:
         ocr_engine = RapidOCR()
 
     results_dict = {}
@@ -181,7 +193,7 @@ def run_ocr(
     # Maintain the original order of the PDF files list
     results = [(fn, results_dict[fn]) for fn, _ in pdf_files]
 
-    progress_cb(1.0, f"✓ OCR complete — {len(results)} file(s) processed.")
+    progress_cb(1.0, f"[OK] OCR complete - {len(results)} file(s) processed.")
     return results
 
 
@@ -211,7 +223,7 @@ def run_nlp_and_predict(
         progress_cb(0.2, "Loading pre-trained SVM model…")
         vectorizer = joblib.load(vect_path)
         clf = joblib.load(clf_path)
-        progress_cb(1.0, "✓ Model loaded from disk.")
+        progress_cb(1.0, "[OK] Model loaded from disk.")
         return vectorizer, clf
 
     # Train from scratch
@@ -240,7 +252,7 @@ def run_nlp_and_predict(
     joblib.dump(vectorizer, vect_path)
     joblib.dump(clf, clf_path)
 
-    progress_cb(1.0, "✓ Model trained and saved.")
+    progress_cb(1.0, "[OK] Model trained and saved.")
     return vectorizer, clf
 
 
@@ -273,6 +285,7 @@ def run_output(
         is_moral_entity,
         bigram_similarity,
     )
+    from ui.ner_segmenter import segment_entity_name
 
     # Load CSV database for name context matching (same as generate_final_csv.py)
     if getattr(sys, "frozen", False):
@@ -337,10 +350,16 @@ def run_output(
                 best_sim = sim
                 best_rec = rec
 
-        if best_rec and best_sim >= 0.60:
-            is_co = is_moral_entity(fullname) or is_moral_entity(best_rec["nombre"])
-            if is_co:
-                return best_rec["nombre"].upper(), "", "", True
+        # 1. High-accuracy NER sequence segmentation
+        is_co, nom, pat, mat = segment_entity_name(fullname)
+
+        # 2. Refine with database ground truth if high similarity match is found (>= 80%)
+        if best_rec and best_sim >= 0.80:
+            db_is_co = is_co or is_moral_entity(best_rec["nombre"])
+            if db_is_co:
+                full_db_name = " ".join([p for p in [best_rec.get("nombre", ""), best_rec.get("paterno", ""), best_rec.get("materno", "")] if p]).strip().upper()
+                company_name = full_db_name if full_db_name else fullname.strip().upper()
+                return company_name, "", "", True
             return (
                 best_rec["nombre"].upper(),
                 best_rec["paterno"].upper(),
@@ -348,9 +367,7 @@ def run_output(
                 False,
             )
 
-        is_co = is_moral_entity(fullname)
-        nombre, paterno, materno = split_full_name(fullname, is_co)
-        return nombre, paterno, materno, is_co
+        return nom, pat, mat, is_co
 
     out_dir = Path(output_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -395,7 +412,7 @@ def run_output(
 
         written.append(str(out_csv))
 
-    progress_cb(1.0, f"✓ Output complete — {len(written)} CSV(s) written to {output_folder}")
+    progress_cb(1.0, f"[OK] Output complete - {len(written)} CSV(s) written to {output_folder}")
     return written
 
 
