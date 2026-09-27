@@ -103,7 +103,12 @@ def run_ocr(
         return []
 
     progress_cb(0.0, f"Initializing RapidOCR — found {len(pdf_files)} PDF(s)…")
-    ocr_engine = RapidOCR()
+    rec_model = _models_dir() / "en_PP-OCRv4_rec_infer.onnx"
+    rec_dict = _models_dir() / "en_dict.txt"
+    if rec_model.exists() and rec_dict.exists():
+        ocr_engine = RapidOCR(rec_model_path=str(rec_model), rec_keys_path=str(rec_dict))
+    else:
+        ocr_engine = RapidOCR()
 
     results_dict = {}
     total = len(pdf_files)

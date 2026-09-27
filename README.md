@@ -24,6 +24,8 @@ ocr-uif/
 │   ├── pipeline.py              # Background extraction pipeline orchestrator
 │   └── extract_and_validate.py  # Core extraction heuristics & text parsers
 ├── models/                      # Lightweight pre-trained ML models for offline inference
+│   ├── en_PP-OCRv4_rec_infer.onnx # Latin/Western PP-OCRv4 recognition model (resolves word spacing & company names)
+│   ├── en_dict.txt              # Character vocabulary dictionary
 │   ├── tfidf_vectorizer.joblib  # Vectorizer for text classification
 │   └── svm_classifier_model.joblib # SVM classifier predicting document status
 ├── build_windows_exe.sh         # Packaging script for Wine emulation
@@ -141,11 +143,11 @@ Using a sample scanned PDF document (containing 2 pages and 0 digital selectable
 
 The backend (implemented in `ui/pipeline.py`) uses a two-stage hybrid architecture combining high-speed layout-preserving OCR with an offline NLP text classifier.
 
-#### 1. Stage 1: Layout-Aware OCR Engine (PyMuPDF + RapidOCR)
+#### 1. Stage 1: Layout-Aware OCR Engine (PyMuPDF + RapidOCR en_PP-OCRv4)
 * **How it works:**
   * **Direct Text Extraction:** The pipeline first queries the PDF using PyMuPDF. If the file contains digital selectable text, it is extracted immediately (takes `< 0.05s`).
   * **OCR Fallback:** If the PDF is scanned, PyMuPDF extracts each page as a high-resolution image (`150 DPI`).
-  * **OCR Execution:** The image is processed by the **RapidOCR ONNX Runtime engine**.
+  * **OCR Execution:** The image is processed by the **RapidOCR ONNX Runtime engine** using the optimized **Latin/Western PP-OCRv4** recognition model (`models/en_PP-OCRv4_rec_infer.onnx`), ensuring correct character and space segmentation on complex corporate names and uppercase Spanish tables without word merging.
   * **Layout Reconstruction:** The OCR results are reconstructed into structured markdown text, preserving columns, headers, and table formatting.
 
 #### 2. Stage 2: Offline NLP Document Classifier (TF-IDF + SVM Classifier)
