@@ -48,20 +48,37 @@ def extract_name(text):
 
     # Common Spanish first names that get merged with the second name
     def clean_ocr_name(name):
+        try:
+            from ui.ner_segmenter import get_gazetteer
+            gaz = get_gazetteer()
+            firstnames = gaz.get("firstnames", set())
+            surnames = gaz.get("surnames", set())
+        except Exception:
+            firstnames, surnames = set(), set()
+
+        exempt_names = {
+            "ANABEL", "MARIANA", "JOSEFINA", "SANTIAGO", "LUISA", "ANAHI",
+            "ANALIA", "MARIBEL", "MARISOL", "MARICELA", "ANTONIA", "ANTONIO",
+            "ANASTASIA", "ANSELMO", "MARITZA", "MARINA"
+        }
         prefixes = ["JOSE", "MARIA", "JUAN", "LUIS", "ANA", "SAN"]
         words = name.split()
         cleaned_words = []
         for w in words:
             w_upper = w.upper()
             split_done = False
-            for prefix in prefixes:
-                if w_upper.startswith(prefix) and len(w_upper) > len(prefix):
-                    rest = w[len(prefix):]
-                    if rest.isalpha():
-                        cleaned_words.append(w[:len(prefix)])
-                        cleaned_words.append(rest)
-                        split_done = True
-                        break
+            # Never split if word is a known valid name (from gazetteer or exempt list)
+            if w_upper not in firstnames and w_upper not in surnames and w_upper not in exempt_names:
+                for prefix in prefixes:
+                    if w_upper.startswith(prefix) and len(w_upper) > len(prefix):
+                        rest = w[len(prefix):]
+                        rest_upper = rest.upper()
+                        # Only split if rest is a known valid first name
+                        if rest.isalpha() and (rest_upper in firstnames or (not firstnames and len(rest) >= 4)):
+                            cleaned_words.append(w[:len(prefix)])
+                            cleaned_words.append(rest)
+                            split_done = True
+                            break
             if not split_done:
                 cleaned_words.append(w)
         result = " ".join(cleaned_words)
