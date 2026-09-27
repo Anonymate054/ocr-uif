@@ -53,6 +53,10 @@ def _load_model_and_gazetteer():
                 _CRF_MODEL = None
                 _GAZETTEER = None
 
+def get_gazetteer() -> dict:
+    _load_model_and_gazetteer()
+    return _GAZETTEER or {"surnames": set(), "firstnames": set()}
+
 def _word2features(sent: List[str], i: int, surnames: Set[str], firstnames: Set[str]) -> dict:
     word = sent[i]
     w_upper = word.upper()
