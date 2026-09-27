@@ -1,4 +1,4 @@
-# Python Virtual Environment
+# Python Virtual Environment & Bytecode
 .venv/
 __pycache__/
 *.pyc
@@ -8,6 +8,20 @@ files/
 files.zip
 transcriptions/
 test/
+*.pdf
+*.xlsx
+*.xls
+.env
+.env.*
+
+# Lab NER Heavy Datasets and Heavy Neural Models (>400MB)
+lab_ner/data/
+lab_ner/dataset/
+lab_ner/models/*.onnx
+lab_ner/models/*.pt
+*.pt
+*.safetensors
+*.bin
 
 # Large binaries & packaging outputs
 OCR-UIF-Release/OCR-UIF/
@@ -21,13 +35,12 @@ dist/
 flet-windows.zip
 windows_wheels/
 pyinstaller_out.log
-*.spec
 *.exe
 *.log
 run_test.py
 audit_bundle.py
 
-# Development / R&D Sandbox (Ignored in Git)
+# Development / R&D Sandbox
 old/
 
 # Temporary / Output Data files
