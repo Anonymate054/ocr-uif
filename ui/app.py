@@ -14,18 +14,17 @@ import sys
 import os
 from pathlib import Path
 
-# Limit CPU core usage to at most 70% to avoid freezing other user processes
-# ONNX Runtime, OpenMP, and BLAS libraries read these variables during initialization
-cores_limit = max(1, int((os.cpu_count() or 2) * 0.70))
-os.environ["OMP_NUM_THREADS"] = str(cores_limit)
-os.environ["ONNXRUNTIME_NUM_THREADS"] = str(cores_limit)
-os.environ["OPENBLAS_NUM_THREADS"] = str(cores_limit)
-os.environ["MKL_NUM_THREADS"] = str(cores_limit)
-os.environ["VECLIB_MAXIMUM_THREADS"] = str(cores_limit)
-os.environ["NUMEXPR_NUM_THREADS"] = str(cores_limit)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
 
-# DEBUG: Write targeted diagnostics report and redirect stdout/stderr
-try:
+# Limita los hilos de ONNX Runtime / BLAS al 70 % de los núcleos para no
+# congelar el equipo. Debe importarse antes que numpy u onnxruntime.
+import ui.cpu_limits  # noqa: E402,F401
+
+
+def _write_debug_report() -> None:
+    """Diagnóstico del .exe (rutas de modelos y assets) y log de stdout/stderr
+    junto al ejecutable. Solo con OCR_UIF_DEBUG=1."""
     exe_dir = Path(sys.executable).parent
     debug_file = exe_dir / "debug_report.txt"
     log_file = exe_dir / "debug_log.txt"
@@ -66,25 +65,20 @@ try:
                         f.write(f"  - {rel_p}\n")
         else:
             f.write("sys._MEIPASS is not set\n")
-except Exception as e:
-    pass
+
+
+if os.environ.get("OCR_UIF_DEBUG") == "1":
+    try:
+        _write_debug_report()
+    except OSError:
+        pass
 
 import re
-import sys
 import threading
-from pathlib import Path
 
 import flet as ft
 
-# ---------------------------------------------------------------------------
-# ★  VERSION — change before each release  ★
-# ---------------------------------------------------------------------------
-APP_VERSION: str = "demo - v 2.1"
-# ---------------------------------------------------------------------------
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PROJECT_ROOT))
-
+from ui.version import APP_VERSION  # noqa: E402
 from ui.pipeline import run_full_pipeline  # noqa: E402
 
 
@@ -354,7 +348,6 @@ async def main(page: ft.Page) -> None:
         page.update()
 
     async def _on_exit(_) -> None:
-        import os
         page.window.destroy()
         os._exit(0)
 
@@ -386,21 +379,26 @@ async def main(page: ft.Page) -> None:
 
         def _work() -> None:
             try:
-                run_full_pipeline(input_folder[0], output_folder[0], _progress_cb, cancel_event)
-                page.run_task(_set_done)
+                result = run_full_pipeline(input_folder[0], output_folder[0], _progress_cb, cancel_event)
+                page.run_task(_set_done, len(getattr(result, "errors", [])))
             except Exception as exc:
                 page.run_task(_set_error, str(exc))
 
         threading.Thread(target=_work, daemon=True).start()
 
-    async def _set_done() -> None:
+    async def _set_done(n_errors: int = 0) -> None:
         btn_run.disabled      = False
         btn_exit.disabled     = False
         btn_cancel.visible    = False
         progress_ring.visible = False
-        check_icon.visible    = True
-        file_lbl.value        = "Proceso completado"
-        sub_lbl.value         = ""
+        if n_errors:
+            error_icon.visible = True
+            file_lbl.value     = "Proceso completado con errores"
+            sub_lbl.value      = f"{n_errors} archivo(s) sin procesar · ver _errores.csv"
+        else:
+            check_icon.visible = True
+            file_lbl.value     = "Proceso completado"
+            sub_lbl.value      = ""
         page.update()
 
     async def _set_error(msg: str) -> None:
