@@ -5,7 +5,7 @@ import pytest
 ft = pytest.importorskip("flet")
 
 import ui.app as app  # noqa: E402
-from ui.cpu_limits import AVAILABLE_CORES, CORES_LIMIT  # noqa: E402
+from ui.cpu_limits import AVAILABLE_CORES, DEFAULT_CORES  # noqa: E402
 
 
 def _slider_and_label(column):
@@ -16,15 +16,15 @@ def _slider_and_label(column):
 
 
 def test_cores_settings_starts_at_default():
-    slider, label = _slider_and_label(app.cores_settings([CORES_LIMIT]))
+    slider, label = _slider_and_label(app.cores_settings([DEFAULT_CORES]))
     assert slider.min == 1 and slider.max == max(AVAILABLE_CORES, 2)
-    assert slider.value == CORES_LIMIT
-    assert label.value == f"{CORES_LIMIT} de {AVAILABLE_CORES}"
+    assert slider.value == DEFAULT_CORES
+    assert label.value == f"{DEFAULT_CORES} de {AVAILABLE_CORES}"
 
 
 @pytest.mark.parametrize("moved_to, expected", [(1.0, 1), (AVAILABLE_CORES + 5, AVAILABLE_CORES)])
 def test_moving_the_slider_updates_cores(moved_to, expected):
-    cores, calls = [CORES_LIMIT], []
+    cores, calls = [DEFAULT_CORES], []
     slider, label = _slider_and_label(app.cores_settings(cores, lambda: calls.append(1)))
     slider.value = moved_to
     slider.on_change(None)
@@ -34,7 +34,7 @@ def test_moving_the_slider_updates_cores(moved_to, expected):
 
 
 def test_reopening_settings_keeps_the_choice():
-    cores = [CORES_LIMIT]
+    cores = [DEFAULT_CORES]
     slider, _ = _slider_and_label(app.cores_settings(cores))
     slider.value = 1
     slider.on_change(None)

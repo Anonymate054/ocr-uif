@@ -79,7 +79,7 @@ import threading
 import flet as ft
 
 from ui.version import APP_VERSION  # noqa: E402
-from ui.cpu_limits import AVAILABLE_CORES, CORES_LIMIT  # noqa: E402
+from ui.cpu_limits import AVAILABLE_CORES, DEFAULT_CORES  # noqa: E402
 from ui.pipeline import format_summary, run_full_pipeline  # noqa: E402
 
 
@@ -150,7 +150,7 @@ def cores_settings(cores: list[int], on_change=None) -> ft.Column:
             ),
             ft.Text(
                 f"Más núcleos procesan más rápido; menos dejan libre el equipo. "
-                f"Por defecto: {CORES_LIMIT}.",
+                f"Por defecto: los {DEFAULT_CORES} disponibles.",
                 color=MUTED, size=11,
             ),
         ],
@@ -176,7 +176,7 @@ async def main(page: ft.Page) -> None:
     input_folder:  list[str] = [""]
     output_folder: list[str] = [""]
     cancel_event = threading.Event()
-    cores:         list[int] = [CORES_LIMIT]
+    cores:         list[int] = [DEFAULT_CORES]
 
     # ── Path display fields (read-only TextField — users cannot type) ─────────
     tf_input = ft.TextField(
@@ -315,7 +315,7 @@ async def main(page: ft.Page) -> None:
             "Sigue estos sencillos pasos para procesar los documentos:\n\n"
             "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
             "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
-            "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa el 70 % de los núcleos.\n\n"
+            "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa todos los núcleos disponibles.\n\n"
             "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas.\n\n"
             "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
             "6. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."

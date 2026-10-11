@@ -138,7 +138,7 @@ def test_engine_not_loaded_when_everything_is_cached(pdf_tree, tmp_path, fake_re
 def test_clamp_cores():
     import ui.cpu_limits as cpu
 
-    assert cpu.clamp_cores(None) == cpu.CORES_LIMIT  # por defecto, lo de siempre
+    assert cpu.clamp_cores(None) == cpu.DEFAULT_CORES == cpu.AVAILABLE_CORES  # por defecto, todos
     assert cpu.clamp_cores(0) == 1
     assert cpu.clamp_cores(-3) == 1
     assert cpu.clamp_cores(cpu.AVAILABLE_CORES + 50) == cpu.AVAILABLE_CORES
@@ -161,4 +161,14 @@ def test_run_ocr_uses_requested_cores(pdf_tree, tmp_path, fake_render, monkeypat
     monkeypatch.setattr(ocr, "ThreadPoolExecutor", spy_pool)
     results = ocr.run_ocr(str(pdf_tree), lambda p, m: None, engine=FakeEngine(), workers=workers)
     assert [r.filename for r in results] == ["a.pdf", "c.PDF"]
-    assert seen == [{"default": cpu.CORES_LIMIT, "all": cpu.AVAILABLE_CORES}.get(expected, expected)]
+    assert seen == [{"default": cpu.DEFAULT_CORES, "all": cpu.AVAILABLE_CORES}.get(expected, expected)]
+
+
+def test_available_cores_respects_process_affinity(monkeypatch):
+    import ui.cpu_limits as cpu
+
+    monkeypatch.setattr(cpu.os, "process_cpu_count", lambda: 3, raising=False)
+    monkeypatch.setattr(cpu.os, "cpu_count", lambda: 16)
+    assert cpu._available_cores() == 3
+    monkeypatch.setattr(cpu.os, "process_cpu_count", lambda: None, raising=False)
+    assert cpu._available_cores() == 16
