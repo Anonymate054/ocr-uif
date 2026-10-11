@@ -6,7 +6,7 @@ congelar el resto del equipo. Debe importarse antes que numpy u onnxruntime,
 porque esas librerías leen estas variables al cargarse.
 
 La barra de núcleos de la UI decide cuántos PDFs se leen en paralelo: va de
-1 a AVAILABLE_CORES y por defecto usa todos los disponibles (DEFAULT_CORES).
+1 a AVAILABLE_CORES y por defecto usa el 70 % (DEFAULT_CORES = CORES_LIMIT).
 """
 
 import os
@@ -20,8 +20,8 @@ def _available_cores() -> int:
 
 
 AVAILABLE_CORES = _available_cores()
-DEFAULT_CORES = AVAILABLE_CORES
 CORES_LIMIT = max(1, int(AVAILABLE_CORES * 0.70))
+DEFAULT_CORES = CORES_LIMIT
 
 
 def clamp_cores(cores) -> int:

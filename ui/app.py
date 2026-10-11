@@ -150,7 +150,7 @@ def cores_settings(cores: list[int], on_change=None) -> ft.Column:
             ),
             ft.Text(
                 f"Más núcleos procesan más rápido; menos dejan libre el equipo. "
-                f"Por defecto: los {DEFAULT_CORES} disponibles.",
+                f"Por defecto: {DEFAULT_CORES} (cerca del 70 %).",
                 color=MUTED, size=11,
             ),
         ],
@@ -252,8 +252,22 @@ async def main(page: ft.Page) -> None:
     )
 
     # ── Cancel button ─────────────────────────────────────────────────────────
-    btn_cancel = ft.TextButton(
-        content=ft.Text("Cancelar", color=ERROR, size=12, weight=ft.FontWeight.W_500),
+    btn_cancel = ft.OutlinedButton(
+        content=ft.Row(
+            controls=[
+                ft.Icon(ft.Icons.STOP_CIRCLE_ROUNDED, color=ERROR, size=16),
+                ft.Text("Cancelar proceso", color=ERROR, size=12,
+                        weight=ft.FontWeight.W_600),
+            ],
+            spacing=6,
+            tight=True,
+        ),
+        style=ft.ButtonStyle(
+            shape=ft.RoundedRectangleBorder(radius=10),
+            side=ft.BorderSide(1, ERROR),
+        ),
+        height=36,
+        tooltip="Detiene el proceso; los CSV ya escritos se conservan",
         visible=False,
     )
 
@@ -315,9 +329,9 @@ async def main(page: ft.Page) -> None:
             "Sigue estos sencillos pasos para procesar los documentos:\n\n"
             "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
             "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
-            "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa todos los núcleos disponibles.\n\n"
+            "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa cerca del 70 % de los núcleos para no saturar el equipo.\n\n"
             "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas.\n\n"
-            "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
+            "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón rojo 'Cancelar proceso' que aparecerá debajo del indicador de progreso.\n\n"
             "6. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
         )
 
@@ -410,6 +424,8 @@ async def main(page: ft.Page) -> None:
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
     def _progress_cb(pct: float, msg: str) -> None:
+        if cancel_event.is_set():  # no tapar el "Cancelando..."
+            return
         filename = ""
         for token in msg.split():
             lower = token.lower().rstrip("….")

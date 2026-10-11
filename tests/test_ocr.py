@@ -138,7 +138,7 @@ def test_engine_not_loaded_when_everything_is_cached(pdf_tree, tmp_path, fake_re
 def test_clamp_cores():
     import ui.cpu_limits as cpu
 
-    assert cpu.clamp_cores(None) == cpu.DEFAULT_CORES == cpu.AVAILABLE_CORES  # por defecto, todos
+    assert cpu.clamp_cores(None) == cpu.DEFAULT_CORES == cpu.CORES_LIMIT  # por defecto, ~70 %
     assert cpu.clamp_cores(0) == 1
     assert cpu.clamp_cores(-3) == 1
     assert cpu.clamp_cores(cpu.AVAILABLE_CORES + 50) == cpu.AVAILABLE_CORES
@@ -172,3 +172,26 @@ def test_available_cores_respects_process_affinity(monkeypatch):
     assert cpu._available_cores() == 3
     monkeypatch.setattr(cpu.os, "process_cpu_count", lambda: None, raising=False)
     assert cpu._available_cores() == 16
+
+
+def test_cancel_does_not_wait_for_a_stuck_pdf(pdf_tree, tmp_path, fake_render, monkeypatch):
+    """Si un PDF se queda atorado, Cancelar responde sin esperar a que termine."""
+    import time
+
+    monkeypatch.setattr(ocr, "transcriptions_dir", lambda: tmp_path / "cache")
+    release = threading.Event()
+
+    class StuckEngine(FakeEngine):
+        def __call__(self, image):
+            release.wait(10)
+            return super().__call__(image)
+
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    start = time.monotonic()
+    try:
+        with pytest.raises(ocr.Cancelled):
+            ocr.run_ocr(str(pdf_tree), lambda p, m: None, cancel, engine=StuckEngine(), workers=1)
+        assert time.monotonic() - start < 3
+    finally:
+        release.set()
