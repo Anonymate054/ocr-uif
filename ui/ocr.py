@@ -167,8 +167,10 @@ def run_ocr(
     progress_cb: ProgressCallback,
     cancel_event: Optional[threading.Event] = None,
     engine=None,
+    workers: Optional[int] = None,
 ) -> List[OcrResult]:
-    """OCR en paralelo de todos los PDFs de *pdf_folder*, en el orden de find_pdfs()."""
+    """OCR en paralelo de todos los PDFs de *pdf_folder*, en el orden de find_pdfs().
+    *workers* son los PDFs leídos a la vez (por defecto, todos los disponibles)."""
     pdf_files = find_pdfs(pdf_folder)
     if not pdf_files:
         progress_cb(1.0, "⚠ No PDF files found in the selected folder.")
@@ -185,7 +187,7 @@ def run_ocr(
 
     total = len(pdf_files)
     results: List[Optional[OcrResult]] = [None] * total
-    workers = ui.cpu_limits.CORES_LIMIT
+    workers = ui.cpu_limits.clamp_cores(workers)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
