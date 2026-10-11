@@ -26,7 +26,7 @@ from ui.paths import models_dir, project_root
 
 __all__ = [
     "Cancelled", "OcrResult", "PipelineResult", "run_ocr", "run_nlp_and_predict",
-    "build_record", "run_output", "run_full_pipeline",
+    "build_record", "run_output", "run_full_pipeline", "format_summary",
 ]
 
 ProgressCallback = Callable[[float, str], None]
@@ -38,12 +38,31 @@ FIELDNAMES = ["MOVIMIENTO", "NOMBRE", "PATERNO", "MATERNO", "MOTIVO", "CIUDAD", 
 ERROR_REPORT = "_errores.csv"
 
 
-class PipelineResult(list):
-    """Lista de CSV escritos, con los archivos que fallaron en `.errors`."""
+MOVEMENTS = ("ALTA", "BAJA")
 
-    def __init__(self, written=(), errors=None):
+
+class PipelineResult(list):
+    """Lista de CSV escritos, con los archivos que fallaron en `.errors` y
+    cuántos CSV salieron de cada movimiento en `.summary` ({"ALTA": n, "BAJA": m})."""
+
+    def __init__(self, written=(), errors=None, summary=None):
         super().__init__(written)
         self.errors: List[Tuple[str, str]] = errors or []
+        self.summary: Dict[str, int] = {m: 0 for m in MOVEMENTS}
+        self.summary.update(summary or {})
+
+
+def format_summary(result: PipelineResult) -> str:
+    """Resumen corto para la UI: "12 clasificados · 8 altas · 4 bajas"."""
+    s = result.summary
+    total = sum(s.values())
+    parts = [f"{total} clasificado{'' if total == 1 else 's'}"]
+    for movement in MOVEMENTS:
+        n = s.get(movement, 0)
+        parts.append(f"{n} {movement.lower()}{'' if n == 1 else 's'}")
+    # Etiquetas que no son ALTA/BAJA (un modelo reentrenado), por si acaso
+    parts += [f"{n} {m.lower()}" for m, n in s.items() if m not in MOVEMENTS and n]
+    return " · ".join(parts)
 
 
 def _check_cancel(cancel_event: Optional[threading.Event]) -> None:
@@ -186,6 +205,7 @@ def run_output(
     movements = clf.predict(vectorizer.transform([r.text for r in ok])) if ok else []
 
     written: List[str] = []
+    summary: Dict[str, int] = {}
     used_names: set = set()
     total = len(ok)
     for idx, (res, movement) in enumerate(zip(ok, movements)):
@@ -196,6 +216,8 @@ def run_output(
             out_csv = out_dir / _unique_csv_name(res.filename, used_names)
             write_csv(out_csv, [row])
             written.append(str(out_csv))
+            movement = str(row["MOVIMIENTO"])
+            summary[movement] = summary.get(movement, 0) + 1
         except Exception as exc:  # un oficio raro no detiene el lote
             errors.append((res.filename, str(exc) or type(exc).__name__))
 
@@ -203,7 +225,7 @@ def run_output(
         progress_cb(1.0, f"⚠ {len(written)} CSV(s) written, {len(errors)} file(s) with errors — see {ERROR_REPORT}")
     else:
         progress_cb(1.0, f"[OK] Output complete - {len(written)} CSV(s) written to {output_folder}")
-    return PipelineResult(written, errors)
+    return PipelineResult(written, errors, summary)
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +242,11 @@ def run_full_pipeline(
     output_folder: str,
     progress_cb: ProgressCallback,
     cancel_event: Optional[threading.Event] = None,
+    workers: Optional[int] = None,
 ) -> PipelineResult:
-    """OCR → modelo → CSV. Devuelve los CSV escritos; los fallos van en `.errors`."""
-    ocr_results = run_ocr(pdf_folder, _scaled(progress_cb, 0.0, 0.4), cancel_event)
+    """OCR → modelo → CSV. Devuelve los CSV escritos; los fallos van en `.errors`
+    y el conteo de altas y bajas en `.summary`. *workers*: PDFs leídos a la vez."""
+    ocr_results = run_ocr(pdf_folder, _scaled(progress_cb, 0.0, 0.4), cancel_event, workers=workers)
     _check_cancel(cancel_event)
     vectorizer, clf = run_nlp_and_predict(ocr_results, _scaled(progress_cb, 0.4, 0.65))
     _check_cancel(cancel_event)

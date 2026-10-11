@@ -94,9 +94,65 @@ def test_run_output_without_pdfs(tmp_path):
 
 
 def test_full_pipeline_progress_is_monotonic(tmp_path, monkeypatch, gaz):
-    monkeypatch.setattr(pipeline, "run_ocr", lambda folder, cb, cancel=None: (cb(0.5, "ocr"), [_ok("r.pdf", BAJA_TEXT)])[1])
+    monkeypatch.setattr(pipeline, "run_ocr", lambda folder, cb, cancel=None, workers=None: (cb(0.5, "ocr"), [_ok("r.pdf", BAJA_TEXT)])[1])
     monkeypatch.setattr(pipeline, "run_nlp_and_predict", lambda res, cb: (FakeVectorizer(), FakeClassifier()))
     progress = []
     written = pipeline.run_full_pipeline("in", str(tmp_path), lambda p, m: progress.append(p))
     assert len(written) == 1
     assert progress == sorted(progress) and progress[-1] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Resumen de altas y bajas al terminar
+# ---------------------------------------------------------------------------
+
+def test_summary_counts_altas_and_bajas(tmp_path, gaz):
+    results = [
+        _ok("rosalva.pdf", BAJA_TEXT),
+        _ok("grupo.pdf", ALTA_TEXT),
+        _ok("felimo.pdf", ALTA_TEXT),
+        OcrResult("roto.pdf", Path("roto.pdf"), error="PDF dañado"),
+    ]
+    written = pipeline.run_output(results, FakeVectorizer(), FakeClassifier(), str(tmp_path), lambda p, m: None)
+    # Los PDFs con error no cuentan como clasificados
+    assert written.summary == {"ALTA": 2, "BAJA": 1}
+    assert pipeline.format_summary(written) == "3 clasificados · 2 altas · 1 baja"
+
+
+def test_summary_counts_numpy_labels(tmp_path, gaz):
+    """El SVM real devuelve np.str_: el resumen debe seguir agrupando por texto."""
+    import numpy as np
+
+    class NumpyClassifier(FakeClassifier):
+        def predict(self, texts):
+            return np.array(super().predict(texts))
+
+    written = pipeline.run_output([_ok("r.pdf", BAJA_TEXT), _ok("g.pdf", ALTA_TEXT)], FakeVectorizer(),
+                                  NumpyClassifier(), str(tmp_path), lambda p, m: None)
+    assert written.summary == {"ALTA": 1, "BAJA": 1}
+    assert all(type(k) is str for k in written.summary)
+
+
+def test_summary_without_pdfs(tmp_path):
+    written = pipeline.run_output([], FakeVectorizer(), FakeClassifier(), str(tmp_path), lambda p, m: None)
+    assert written.summary == {"ALTA": 0, "BAJA": 0}
+    assert pipeline.format_summary(written) == "0 clasificados · 0 altas · 0 bajas"
+
+
+def test_format_summary_singular():
+    result = pipeline.PipelineResult(["a.csv"], summary={"ALTA": 1})
+    assert pipeline.format_summary(result) == "1 clasificado · 1 alta · 0 bajas"
+
+
+def test_full_pipeline_passes_cores_to_ocr(tmp_path, monkeypatch, gaz):
+    seen = {}
+
+    def fake_ocr(folder, cb, cancel=None, workers=None):
+        seen["workers"] = workers
+        return [_ok("r.pdf", BAJA_TEXT)]
+
+    monkeypatch.setattr(pipeline, "run_ocr", fake_ocr)
+    monkeypatch.setattr(pipeline, "run_nlp_and_predict", lambda res, cb: (FakeVectorizer(), FakeClassifier()))
+    written = pipeline.run_full_pipeline("in", str(tmp_path), lambda p, m: None, workers=3)
+    assert seen["workers"] == 3
+    assert written.summary == {"ALTA": 0, "BAJA": 1}
