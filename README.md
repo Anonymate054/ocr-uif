@@ -12,7 +12,7 @@ The project follows a clean production-grade structure, separating executable co
 
 ```text
 ocr-uif/
-├── .github/                     # Automated CI/CD workflows
+├── .github/workflows/tests.yml  # Runs the regression tests on every push
 ├── OCR-UIF-Release/             # Standardized launch scripts & compiled apps
 │   ├── OCR-UIF.exe              # Standalone Windows GUI executable
 │   ├── run_linux.sh             # Linux execution script
@@ -21,13 +21,20 @@ ocr-uif/
 ├── ui/                          # GUI Application package (Flet)
 │   ├── assets/                  # GUI styling theme, fonts, and assets
 │   ├── app.py                   # Desktop application UI layout
-│   ├── pipeline.py              # Background extraction pipeline orchestrator
-│   └── extract_and_validate.py  # Core extraction heuristics & text parsers
+│   ├── pipeline.py              # Pipeline orchestrator: OCR → classifier → CSV
+│   ├── ocr.py                   # Stage 1: first-page OCR with on-disk cache
+│   ├── extract_and_validate.py  # Office number and name extraction from OCR text
+│   ├── name_normalization.py    # Accent/Ñ handling and OCR name repair
+│   ├── ner_segmenter.py         # CRF segmentation into NOMBRE / PATERNO / MATERNO
+│   ├── paths.py                 # Model and cache paths (source and .exe)
+│   └── cpu_limits.py            # Caps numeric libraries at 70 % of CPU cores
 ├── models/                      # Lightweight pre-trained ML models for offline inference
 │   ├── en_PP-OCRv4_rec_infer.onnx # Latin/Western PP-OCRv4 recognition model (resolves word spacing & company names)
 │   ├── en_dict.txt              # Character vocabulary dictionary
 │   ├── tfidf_vectorizer.joblib  # Vectorizer for text classification
 │   └── svm_classifier_model.joblib # SVM classifier predicting document status
+├── tests/                       # Unit tests (python -m pytest tests)
+├── scripts/evaluate_outputs.py  # Compares output CSVs with reference CSVs
 ├── build_windows_exe.sh         # Packaging script for Wine emulation
 ├── OCR-UIF.spec                 # PyInstaller spec configuration
 ├── requirements.txt             # Production dependencies
@@ -145,10 +152,13 @@ The backend (implemented in `ui/pipeline.py`) uses a two-stage hybrid architectu
 
 #### 1. Stage 1: Layout-Aware OCR Engine (PyMuPDF + RapidOCR en_PP-OCRv4)
 * **How it works:**
-  * **Direct Text Extraction:** The pipeline first queries the PDF using PyMuPDF. If the file contains digital selectable text, it is extracted immediately (takes `< 0.05s`).
-  * **OCR Fallback:** If the PDF is scanned, PyMuPDF extracts each page as a high-resolution image (`150 DPI`).
+  * **Rendering:** PyMuPDF renders the **first page** of each PDF at `96 DPI` (the page that holds the name, RFC and office number).
   * **OCR Execution:** The image is processed by the **RapidOCR ONNX Runtime engine** using the optimized **Latin/Western PP-OCRv4** recognition model (`models/en_PP-OCRv4_rec_infer.onnx`), ensuring correct character and space segmentation on complex corporate names and uppercase Spanish tables without word merging.
-  * **Layout Reconstruction:** The OCR results are reconstructed into structured markdown text, preserving columns, headers, and table formatting.
+  * **Output:** The recognized lines are joined as plain text (one line per detected text box).
+  * **Character set:** `models/en_dict.txt` is ASCII only, so the model never outputs `Ñ` or accented vowels (`SALDAÑA` is read as `SALDANA`, `RAMÍREZ` often as `RAMFREZ`). Stage 3 repairs this.
+  * **Cache:** Each transcription is cached under a hash of the PDF contents plus `OCR_CACHE_TAG` (in `ui/ocr.py`). Running from source it goes to `transcriptions/`; the `.exe` uses `%LOCALAPPDATA%\OCR-UIF\transcriptions`, never the folder next to the executable. Change `OCR_CACHE_TAG` whenever the OCR model, DPI or pages change.
+  * **Speed:** Recognition is about 87 % of the run time. PDFs are processed in parallel (70 % of the cores) with one shared engine, which measured faster than one engine per thread. Disabling the angle classifier or batching recognition did not speed it up and changed the text, so they are left at their defaults. When every PDF is already cached, the OCR models are not loaded at all.
+  * **Errors:** A PDF that fails (unreadable file, no text found) gets no CSV; it is listed in `_errores.csv` in the output folder and the app shows how many failed.
 
 #### 2. Stage 2: Offline NLP Document Classifier (TF-IDF + SVM Classifier)
 * **How it works:**
@@ -190,7 +200,10 @@ To select the most robust classification strategy for identifying register addit
 #### 3. Stage 3: Entity Extractor & Name Standardizer
 * **How it works:**
   * **Heuristic Matching:** Regex patterns identify entry numbers, movement dates, and official reference numbers.
-  * **Fuzzy Alignment:** Bigram and similarity threshold comparisons match extracted entity names against local records to output clean CSV files.
+  * **Name repair (`ui/name_normalization.py`):** Accents are removed from vowels and `Ñ` is kept, matching the reference CSVs (`JOSE MARIA`, `SALDAÑA`). Tokens the OCR damaged are repaired only when the result is a known name in `models/gazetteer.joblib` (`RAMFREZ → RAMIREZ`, `ZEPEDAE → ZEPEDA`), and for people `Ñ` is restored when the `Ñ` spelling is a known name (`SALDANA → SALDAÑA`, `PENA → PEÑA`).
+  * **Table headers:** In the 110/K offices the name comes after a `Persona / RFC` table header; those header lines are skipped. Spelled-out legal forms are shortened (`SOCIEDAD ANONIMA DE CAPITAL VARIABLE → SA DE CV`).
+  * **Segmentation (`ui/ner_segmenter.py`):** The CRF tagger splits people into NOMBRE / PATERNO / MATERNO and detects companies. The CRF tags almost any unknown 2-3 word name as a company, so a name is only treated as a company when it also contains a company word (`SA`, `SC`, `GRUPO`, `ASOCIACION`...); otherwise it is split by position (`MEIYU LEI → MEIYU / LEI`). Extracted names are **not** matched against other CSV files on disk.
+  * **CSV output:** One CSV per PDF, encoded in Windows-1252 (same as the reference CSVs) so Excel shows `Ñ` correctly.
 
 ---
 
