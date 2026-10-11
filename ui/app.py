@@ -76,15 +76,10 @@ from pathlib import Path
 
 import flet as ft
 
-# ---------------------------------------------------------------------------
-# ★  VERSION — change before each release  ★
-# ---------------------------------------------------------------------------
-APP_VERSION: str = "demo - v 2.1"
-# ---------------------------------------------------------------------------
-
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+from ui.version import APP_VERSION  # noqa: E402
 from ui.pipeline import run_full_pipeline  # noqa: E402
 
 
