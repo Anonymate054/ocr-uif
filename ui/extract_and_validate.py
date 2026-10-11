@@ -1,298 +1,251 @@
-import os
+"""
+ui/extract_and_validate.py
+==========================
+Extracción del número de oficio y del nombre de la persona o empresa a partir
+del texto OCR de la primera página de un oficio de la UIF.
+
+El nombre se busca en tres pasos, del más preciso al más general:
+  1. Frases del oficio ("Se elimina ... a:", "impuesta a", "quejosa", ...).
+  2. Tablas con encabezado NOMBRE / PERSONA.
+  3. La primera línea larga en mayúsculas que no sea un encabezado.
+"""
+
+from __future__ import annotations
+
 import re
-import pandas as pd
-import joblib
+from typing import Iterable, Optional
 
-def get_char_bigrams(s):
-    return set(s[i:i+2] for i in range(len(s)-1))
+# ── Número de oficio ─────────────────────────────────────────────────────────
 
-def bigram_similarity(s1, s2):
-    b1 = get_char_bigrams(s1)
-    b2 = get_char_bigrams(s2)
-    if not b1 and not b2:
-        return 1.0
-    return len(b1.intersection(b2)) / len(b1.union(b2))
+# 110/K/2924/2026, 110-G-1329-2026, 110 K 2924 2026...
+_OFICIO_RE = re.compile(r"110[/\-\s_]?[GKgk][/\-\s_]?\d+[/\-\s_]?\d+")
+_OFICIO_SEP_RE = re.compile(r"[/\-\s_]+")
 
-def extract_office_number(text):
-    # Regex to find patterns like 110/K/2924/2026 or 110-G-1329-2026
-    m = re.search(r"110[/\-\s_]?[GKgk][/\-\s_]?\d+[/\-\s_]?\d+", text)
+
+def extract_office_number(text: str) -> str:
+    """Número de oficio normalizado ("OFICIO NO. 110/K/2924/2026") o "N/A"."""
+    m = _OFICIO_RE.search(text)
     if m:
-        # Normalize to standard 110/K/2924/2026 format
-        parts = re.split(r"[/\-\s_]+", m.group(0).upper())
+        parts = _OFICIO_SEP_RE.split(m.group(0).upper())
         if len(parts) >= 4:
             return f"OFICIO NO. {parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}"
     return "N/A"
 
-def extract_name(text):
-    # Normalize spacing and line endings
-    text_clean = re.sub(r"[ \t]+", " ", text)
-    lines = [line.strip() for line in text_clean.split("\n") if line.strip()]
-    
-    # Reject list for generic legal terms
-    rejects = ["DICHA PERSONA", "DICHAS PERSONAS", "LA QUEJOSA", "EL QUEJOSO", "LAS QUEJOSAS", "LOS QUEJOSOS", "EL ELIMINADO", "LOS ELIMINADOS", "LA SOCIEDAD", "LAS SOCIEDADES"]
-    
-    # Heuristic to check if a name is actually a sentence or legal term
-    def is_invalid_name(name):
-        name_upper = name.upper()
-        invalid_keywords = [
-            "LISTA DE PERSONAS", "LISTA", "BLOQUEADAS", "CONGELACION", "ACTIVOS", "SANCIONES", 
-            "RESOLUCION", "ACUERDO", "OFICIO", "ELIMINACION", "CONGELAR", "BLOQUEAR",
-            "ESTADO ISLAMICO", "CONSEJO DE SEGURIDAD", "NACIONES UNIDAS", "JUICIO DE AMPARO",
-            "TRIBUNAL", "COLEGIADO", "JUZGADO", "DISTRITO", "REVISION", "PROHIBICION", "EMBARGO",
-            "DE VIAJAR", "ARMAS", "N.O", "MATERIA", "HACIENDA", "SECRETARIA"
-        ]
-        for kw in invalid_keywords:
-            if kw in name_upper:
-                return True
-        return False
 
-    # Common Spanish first names that get merged with the second name
-    def clean_ocr_name(name):
-        try:
-            from ui.ner_segmenter import get_gazetteer
-            gaz = get_gazetteer()
-            firstnames = gaz.get("firstnames", set())
-            surnames = gaz.get("surnames", set())
-        except Exception:
-            firstnames, surnames = set(), set()
+# ── Sufijos societarios ──────────────────────────────────────────────────────
 
-        exempt_names = {
-            "ANABEL", "MARIANA", "JOSEFINA", "SANTIAGO", "LUISA", "ANAHI",
-            "ANALIA", "MARIBEL", "MARISOL", "MARICELA", "ANTONIA", "ANTONIO",
-            "ANASTASIA", "ANSELMO", "MARITZA", "MARINA"
-        }
-        prefixes = ["JOSE", "MARIA", "JUAN", "LUIS", "ANA", "SAN"]
-        words = name.split()
-        cleaned_words = []
-        for w in words:
-            w_upper = w.upper()
-            split_done = False
-            # Never split if word is a known valid name (from gazetteer or exempt list)
-            if w_upper not in firstnames and w_upper not in surnames and w_upper not in exempt_names:
-                for prefix in prefixes:
-                    if w_upper.startswith(prefix) and len(w_upper) > len(prefix):
-                        rest = w[len(prefix):]
-                        rest_upper = rest.upper()
-                        # Only split if rest is a known valid first name
-                        if rest.isalpha() and (rest_upper in firstnames or (not firstnames and len(rest) >= 4)):
-                            cleaned_words.append(w[:len(prefix)])
-                            cleaned_words.append(rest)
-                            split_done = True
-                            break
-            if not split_done:
-                cleaned_words.append(w)
-        result = " ".join(cleaned_words)
+# Variantes de OCR y forma estándar, en el orden en que deben probarse
+_SOCIEDADES = [
+    (r"\bSOCIEDAD\s+AN[OÓ]NIMA\s+PROMOTORA\s+DE\s+INVERSI[OÓ]N\s+DE\s+CAPITAL\s+VARIABLE\b", "SAPI DE CV"),
+    (r"\bSOCIEDAD\s+DE\s+RESPONSABILIDAD\s+LIMITADA\s+DE\s+CAPITAL\s+VARIABLE\b", "S DE RL DE CV"),
+    (r"\bSOCIEDAD\s+AN[OÓ]NIMA\s+DE\s+CAPITAL\s+VARIABLE\b", "SA DE CV"),
+    (r"\bSOCIEDAD\s+CIVIL\b", "SC"),
+    (r"\bASOCIACI[OÓ]N\s+CIVIL\b", "AC"),
+    (r"\bS[\.\,\s]*A[\.\,\s]*P[\.\,\s]*I[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SAPI DE CV"),
+    (r"\bS[\.\,\s]*DE[\.\,\s]*R[\.\,\s]*L[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "S DE RL DE CV"),
+    (r"\bS[\.\,\s]*A[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SA DE CV"),
+    (r"\bS[\.\,\s]*A[\.\,\s]*S[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SAS DE CV"),
+    (r"\bS[\.\,\s]*C[\.\,\s]*(?:DE[\.\,\s]*)?R[\.\,\s]*L\b", "SC DE RL"),
+    (r"\bS[\.\,\s]*C\b", "SC"),
+    (r"\bA[\.\,\s]*C\b", "AC"),
+]
+# En el texto completo solo en mayúsculas (en minúsculas sería texto corrido
+# del oficio); en el nombre ya extraído, sin distinguir mayúsculas.
+_SUFFIX_IN_TEXT = [(re.compile(r",?[ \t]*" + pat), " " + rep) for pat, rep in _SOCIEDADES]
+_SUFFIX_IN_NAME = [(re.compile(pat, re.IGNORECASE), rep) for pat, rep in _SOCIEDADES]
 
-        # Standardize and clean corporate suffixes
-        sociedades = [
-            (r"\bS[\.\,\s]*A[\.\,\s]*P[\.\,\s]*I[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SAPI DE CV"),
-            (r"\bS[\.\,\s]*DE[\.\,\s]*R[\.\,\s]*L[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "S DE RL DE CV"),
-            (r"\bS[\.\,\s]*A[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SA DE CV"),
-            (r"\bS[\.\,\s]*A[\.\,\s]*S[\.\,\s]*(?:DE[\.\,\s]*)?C[\.\,\s]*V\b", "SAS DE CV"),
-            (r"\bS[\.\,\s]*C[\.\,\s]*(?:DE[\.\,\s]*)?R[\.\,\s]*L\b", "SC DE RL"),
-            (r"\bS[\.\,\s]*C\b", "SC"),
-            (r"\bA[\.\,\s]*C\b", "AC"),
-        ]
-        for pat, rep in sociedades:
-            result = re.sub(pat, rep, result, flags=re.IGNORECASE)
 
-        # Clean trailing punctuation and multiple spaces
-        result = re.sub(r"[\.\,\;\:\-\_\s]+$", "", result)
-        result = re.sub(r"^[\.\,\;\:\-\_\s]+", "", result)
-        return re.sub(r"\s+", " ", result).strip()
+def _join_corporate_suffixes(text: str) -> str:
+    """Convierte ", S. DE R.L. DE C.V." en " S DE RL DE CV" para que los patrones
+    de nombre no corten la razón social en los puntos y comas del sufijo."""
+    for rx, rep in _SUFFIX_IN_TEXT:
+        text = rx.sub(rep, text)
+    return text
 
-    # 1. Try BAJA / Se elimina / Resolution sentences first (very precise regex patterns)
-    patterns = [
-        # Se elimina de la Lista de Personas Bloqueadas a: <NAME>
-        r"elimina,?\s*(?:de\s+la\s+Lista\s+de\s+Personas\s+Bloqueadas\s+)?a\s*:\s*(?:\d\)\s*)?([a-zA-Z\s\n\.,_-]{3,120}?)(?:\n\n|\r|\n|;|,|\s*con\s*R\.?F\.?C\.?|\.)",
-        # eliminacion de <NAME>, con RFC
-        r"eliminaci[oó6]n,?\s*de\s*([a-zA-Z\s\n\.,_-]{3,120}?)(?:,|\s*con\s*R\.?F\.?C\.?|;|\s*de\s*la\s*Lista|\n\n)",
-        # impuesta a <NAME>
-        r"impuesta,?\s*a\s*([a-zA-Z\s\n\.,_-]{3,120}?)(?:,|\s*con\s*R\.?F\.?C\.?|;|\s*de\s*la\s*Lista|\.|\n\n)",
-        # impuestaa <NAME>
-        r"impuestaa,?\s*([a-zA-Z\s\n\.,_-]{3,120}?)(?:,|\s*con\s*R\.?F\.?C\.?|;|\s*de\s*la\s*Lista|\.|\n\n)",
-        # hace a <NAME>
-        r"hace,?\s*a\s*([a-zA-Z\s\n\.,_-]{3,120}?)(?:,|\s*con\s*R\.?F\.?C\.?|;|\s*de\s*la\s*Lista|\.|\n\n)",
-        # sanciones a: 1) <NAME>
-        r"sanciones,?\s*a\s*:\s*(?:\d\)\s*)?([a-zA-Z\s\n\.,_-]{3,120}?)(?:;|,|\s*con\s*R\.?F\.?C\.?|\.|\n\n)",
-        # suspendidos a <NAME>
-        r"suspendidos,?\s*a\s*([a-zA-Z\s\n\.,_-]{3,120}?)(?:,|\s*con\s*R\.?F\.?C\.?|;|\s*de\s*la\s*Lista|\.|\n\n)",
-        # suspendidosa <NAME>
-        r"suspendidosa,?\s*([a-zA-Z\s\n\.,_-]{3,120}?)(?:,|\s*con\s*R\.?F\.?C\.?|;|\s*de\s*la\s*Lista|\.|\n\n)",
-        # amparo: quejosa <NAME>
-        r"quejosa\s+([a-zA-Z\s\n\.,_-]{3,120}?)(?:\.|\n\n|con\s+R\.?F\.?C\.?)"
-    ]
-    
-    for pat in patterns:
-        for m in re.finditer(pat, text_clean, re.IGNORECASE):
-            name_cand = m.group(1).strip()
-            name_cand = re.sub(r"\s+", " ", name_cand)
-            name_cand = re.sub(r"[,;\.\s]+(?:con|de|la|R\.?F\.?C\.?|C\.?O\.?N\.?|con\s+R\.?F\.?C\.?)*$", "", name_cand, flags=re.IGNORECASE).strip()
-            name_cand = re.sub(r"^[,\s\.]+", "", name_cand).strip()
-            if len(name_cand.split()) >= 1:
-                name_upper = name_cand.upper()
-                if name_upper not in rejects and not is_invalid_name(name_upper):
-                    return clean_ocr_name(name_upper)
-                
-    # 2. Try table-based extraction (often in ALTA documents)
+
+# ── Validación de candidatos ─────────────────────────────────────────────────
+
+# Frases genéricas que los patrones pueden capturar en lugar de un nombre,
+# incluidos los encabezados de tabla (PERSONA / RFC) de los oficios 110/K.
+_REJECTS = frozenset({
+    "DICHA PERSONA", "DICHAS PERSONAS", "LA QUEJOSA", "EL QUEJOSO", "LAS QUEJOSAS",
+    "LOS QUEJOSOS", "EL ELIMINADO", "LOS ELIMINADOS", "LA SOCIEDAD", "LAS SOCIEDADES",
+    "PERSONA", "NOMBRE", "RFC",
+})
+
+# Si aparecen dentro del candidato, es una frase del oficio y no un nombre
+_INVALID_KEYWORDS = (
+    "LISTA DE PERSONAS", "LISTA", "BLOQUEADAS", "CONGELACION", "ACTIVOS", "SANCIONES",
+    "RESOLUCION", "ACUERDO", "OFICIO", "ELIMINACION", "CONGELAR", "BLOQUEAR",
+    "ESTADO ISLAMICO", "CONSEJO DE SEGURIDAD", "NACIONES UNIDAS", "JUICIO DE AMPARO",
+    "TRIBUNAL", "COLEGIADO", "JUZGADO", "DISTRITO", "REVISION", "PROHIBICION", "EMBARGO",
+    "DE VIAJAR", "ARMAS", "N.O", "MATERIA", "HACIENDA", "SECRETARIA",
+)
+
+
+def _is_valid_candidate(name_upper: str) -> bool:
+    return name_upper not in _REJECTS and not any(kw in name_upper for kw in _INVALID_KEYWORDS)
+
+
+# ── Limpieza del nombre extraído ─────────────────────────────────────────────
+
+# Nombres compuestos que el OCR pega ("JOSERICARDO") y que sí existen juntos
+_MERGE_EXEMPT = frozenset({
+    "ANABEL", "MARIANA", "JOSEFINA", "SANTIAGO", "LUISA", "ANAHI",
+    "ANALIA", "MARIBEL", "MARISOL", "MARICELA", "ANTONIA", "ANTONIO",
+    "ANASTASIA", "ANSELMO", "MARITZA", "MARINA",
+})
+_MERGE_PREFIXES = ("JOSE", "MARIA", "JUAN", "LUIS", "ANA", "SAN")
+_TRAILING_PUNCT_RE = re.compile(r"[\.\,\;\:\-\_\s]+$")
+_LEADING_PUNCT_RE = re.compile(r"^[\.\,\;\:\-\_\s]+")
+_SPACES_RE = re.compile(r"\s+")
+
+
+def _known_names() -> tuple:
+    try:
+        from ui.ner_segmenter import get_gazetteer
+        gaz = get_gazetteer()
+        return gaz.get("firstnames", set()), gaz.get("surnames", set())
+    except Exception:
+        return set(), set()
+
+
+def _split_merged_word(word: str, firstnames, surnames) -> Iterable[str]:
+    """JOSERICARDO -> JOSE RICARDO, solo si RICARDO es un nombre conocido."""
+    upper = word.upper()
+    if upper in firstnames or upper in surnames or upper in _MERGE_EXEMPT:
+        return (word,)
+    for prefix in _MERGE_PREFIXES:
+        if upper.startswith(prefix) and len(upper) > len(prefix):
+            rest = word[len(prefix):]
+            if rest.isalpha() and (rest.upper() in firstnames or (not firstnames and len(rest) >= 4)):
+                return (word[:len(prefix)], rest)
+    return (word,)
+
+
+def _clean_ocr_name(name: str) -> str:
+    firstnames, surnames = _known_names()
+    words = [part for w in name.split() for part in _split_merged_word(w, firstnames, surnames)]
+    result = " ".join(words)
+    for rx, rep in _SUFFIX_IN_NAME:
+        result = rx.sub(rep, result)
+    result = _LEADING_PUNCT_RE.sub("", _TRAILING_PUNCT_RE.sub("", result))
+    return _SPACES_RE.sub(" ", result).strip()
+
+
+# ── Paso 1: frases del oficio ────────────────────────────────────────────────
+
+_NAME = r"([a-zA-ZÁÉÍÓÚÜÑáéíóúüñ\s\n\.,_-]{3,120}?)"
+_RFC = r"\s*con\s*R\.?F\.?C\.?"
+# Encabezados de tabla entre la frase y el nombre ("a:\nPersona\nRFC.\nJIANCHENG...")
+_HEADER_LINES = r"(?:(?:Persona|Nombre|RFC|N\.?o)\.?[ \t]*\n\s*)*"
+_ITEM_NUMBER = r"(?:\d\)\s*)?"
+_END_DEFAULT = rf"(?:,|{_RFC}|;|\s*de\s*la\s*Lista|\.|\n\n)"
+
+_PHRASE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in (
+    # Se elimina de la Lista de Personas Bloqueadas a: <NAME>
+    rf"elimina,?\s*(?:de\s+la\s+Lista\s+de\s+Personas\s+Bloqueadas\s+)?a\s*:\s*{_HEADER_LINES}{_ITEM_NUMBER}{_NAME}(?:\n\n|\r|\n|;|,|{_RFC}|\.)",
+    # eliminación de <NAME>, con RFC
+    rf"eliminaci[oó6]n,?\s*de\s*{_NAME}(?:,|{_RFC}|;|\s*de\s*la\s*Lista|\n\n)",
+    # impuesta a <NAME> / impuestaa <NAME>
+    rf"impuesta,?\s*a\s*{_NAME}{_END_DEFAULT}",
+    rf"impuestaa,?\s*{_NAME}{_END_DEFAULT}",
+    # hace a <NAME>
+    rf"hace,?\s*a\s*{_NAME}{_END_DEFAULT}",
+    # sanciones a: 1) <NAME>
+    rf"sanciones,?\s*a\s*:\s*{_HEADER_LINES}{_ITEM_NUMBER}{_NAME}(?:;|,|{_RFC}|\.|\n\n)",
+    # suspendidos a <NAME> / suspendidosa <NAME>
+    rf"suspendidos,?\s*a\s*{_NAME}{_END_DEFAULT}",
+    rf"suspendidosa,?\s*{_NAME}{_END_DEFAULT}",
+    # amparo: quejosa <NAME>
+    rf"quejosa\s+{_NAME}(?:\.|\n\n|con\s+R\.?F\.?C\.?)",
+)]
+_CANDIDATE_TAIL_RE = re.compile(
+    r"[,;\.\s]+(?:con|de|la|R\.?F\.?C\.?|C\.?O\.?N\.?|con\s+R\.?F\.?C\.?)*$", re.IGNORECASE
+)
+_CANDIDATE_HEAD_RE = re.compile(r"^[,\s\.]+")
+
+
+def _from_phrases(text: str) -> Optional[str]:
+    for rx in _PHRASE_PATTERNS:
+        for m in rx.finditer(text):
+            cand = _SPACES_RE.sub(" ", m.group(1).strip())
+            cand = _CANDIDATE_HEAD_RE.sub("", _CANDIDATE_TAIL_RE.sub("", cand).strip()).strip()
+            if cand and _is_valid_candidate(cand.upper()):
+                return _clean_ocr_name(cand.upper())
+    return None
+
+
+# ── Paso 2: tablas con encabezado ────────────────────────────────────────────
+
+_TABLE_HEADERS = frozenset({"NOMBRE", "N.O NOMBRE", "N.O", "NOMBRE RFC", "FC NOMBRE", "PERSONA"})
+_TABLE_SKIP = frozenset({"RFC", "FC", "N.O", "CURP", "FECHA", "NOMBRE", "PERSONA", "N.O."})
+_TABLE_FOOTERS = ("av. constituyentes", "margarita maza", "pagina")
+_DATE_RE = re.compile(r"\d{2}/\d{2}/\d{4}")
+_NON_LETTERS_RE = re.compile(r"[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+")
+
+
+def _looks_like_code(line: str) -> bool:
+    """Una sola palabra con dígitos (RFC, CURP, folio)."""
+    return len(line.split()) == 1 and any(c.isdigit() for c in line)
+
+
+def _mostly_upper(line: str) -> bool:
+    letters = _NON_LETTERS_RE.sub("", line)
+    return bool(letters) and sum(c.isupper() for c in letters) > len(letters) * 0.5
+
+
+def _from_table(lines: list) -> Optional[str]:
     for i, line in enumerate(lines):
-        if line.upper() in ["NOMBRE", "N.O NOMBRE", "N.O", "NOMBRE RFC", "FC NOMBRE", "PERSONA"]:
-            name_lines = []
-            for j in range(i + 1, min(i + 10, len(lines))):
-                candidate = lines[j]
-                # Skip headers and metadata tags
-                if candidate.upper() in ["RFC", "FC", "N.O", "CURP", "FECHA", "NOMBRE", "PERSONA", "N.O."]:
-                    continue
-                # Stop conditions: date, pure numbers, or footer
-                if re.search(r"\d{2}/\d{2}/\d{4}", candidate):
-                    break
-                if re.search(r"^[0-9]+$", candidate):
-                    if int(candidate) < 100:
-                        continue # Skip row index
-                    else:
-                        break
-                if "av. constituyentes" in candidate.lower() or "margarita maza" in candidate.lower() or "pagina" in candidate.lower():
-                    break
-                # If candidate looks like RFC, stop/skip
-                if len(candidate.split()) == 1 and any(char.isdigit() for char in candidate) and len(candidate) > 8:
-                    break
-                # Check uppercase letter ratio
-                letters = re.sub(r"[^A-Za-z]+", "", candidate)
-                if letters and sum(1 for c in letters if c.isupper()) > len(letters) * 0.5:
-                    name_lines.append(candidate)
-            if name_lines:
-                # Filter out single-word candidates containing numbers
-                filtered = [l for l in name_lines if not (len(l.split()) == 1 and any(c.isdigit() for c in l))]
-                if filtered:
-                    res_name = " ".join(filtered).upper()
-                    if res_name not in rejects and not is_invalid_name(res_name):
-                        return clean_ocr_name(res_name)
-                    
-    # 3. Fallback: find the first line in the text that is long, fully uppercase, and has no numbers
-    skip_keywords = ["HACIENDA", "INTELI", "FINAN", "UNIDAD", "MEXICO", "RESOLU", "PRESENTE", "OFICIO", "DIREC", "GENERAL", "LISTA", "PERSONA", "BLOQ", "PROCED", "GARANT", "AUDIENCIA", "PAGINA"]
+        if line.upper() not in _TABLE_HEADERS:
+            continue
+        name_lines = []
+        for cand in lines[i + 1:i + 10]:
+            if cand.upper() in _TABLE_SKIP:
+                continue
+            if _DATE_RE.search(cand):
+                break
+            if cand.isascii() and cand.isdigit():
+                if int(cand) < 100:
+                    continue  # número de renglón
+                break
+            if any(f in cand.lower() for f in _TABLE_FOOTERS):
+                break
+            if _looks_like_code(cand) and len(cand) > 8:
+                break  # RFC: termina el nombre
+            if _mostly_upper(cand):
+                name_lines.append(cand)
+        filtered = [l for l in name_lines if not _looks_like_code(l)]
+        if filtered:
+            name = " ".join(filtered).upper()
+            if _is_valid_candidate(name):
+                return _clean_ocr_name(name)
+    return None
+
+
+# ── Paso 3: primera línea en mayúsculas ──────────────────────────────────────
+
+_HEADER_KEYWORDS = (
+    "HACIENDA", "INTELI", "FINAN", "UNIDAD", "MEXICO", "RESOLU", "PRESENTE", "OFICIO",
+    "DIREC", "GENERAL", "LISTA", "PERSONA", "BLOQ", "PROCED", "GARANT", "AUDIENCIA", "PAGINA",
+)
+
+
+def _from_uppercase_line(lines: list) -> Optional[str]:
     for line in lines:
         if len(line) > 10 and line.isupper() and not any(c.isdigit() for c in line):
-            # Skip common headers
-            if any(k in line.upper() for k in skip_keywords):
+            if any(k in line for k in _HEADER_KEYWORDS):
                 continue
-            res_name = line.upper()
-            if res_name not in rejects and not is_invalid_name(res_name):
-                return clean_ocr_name(res_name)
-            
-    return "N/A"
+            if _is_valid_candidate(line):
+                return _clean_ocr_name(line)
+    return None
 
-from ui.ner_segmenter import segment_entity_name
 
-def split_full_name(fullname, is_company=None):
-    """
-    Intelligently splits a full name into (Nombre, Paterno, Materno).
-    Leverages the trained CRF NER sequence tagger.
-    """
-    if not fullname or fullname == "N/A":
-        return "", "", ""
-    
-    is_co, nombre, paterno, materno = segment_entity_name(fullname)
-    if is_company is True or is_co:
-        return fullname, "", ""
-    
-    return nombre, paterno, materno
+_BLANKS_RE = re.compile(r"[ \t]+")
 
-def is_moral_entity(name):
-    """
-    Determines if an entity is a company / persona moral using the NER model.
-    """
-    if not name or name == "N/A":
-        return False
-    is_co, _, _, _ = segment_entity_name(name)
-    return is_co
 
-def main():
-    # Load dataset
-    df = pd.read_parquet("files_dataset.parquet")
-    
-    # Load champion SVM model and vectorizer
-    vectorizer = joblib.load("models/tfidf_vectorizer.joblib")
-    clf = joblib.load("models/svm_classifier_model.joblib")
-    
-    print(f"Loaded {len(df)} matched files from files_dataset.parquet.")
-    
-    matched_records = []
-    name_correct_count = 0
-    motivo_correct_count = 0
-    
-    for idx, row in df.iterrows():
-        text = row["extracted_text"]
-        pdf_name = row["pdf_name"]
-        
-        # Predict movement using champion SVM
-        X_vec = vectorizer.transform([text])
-        pred_movement = clf.predict(X_vec)[0]
-        
-        # Extract metadata from text
-        extracted_oficio = extract_office_number(text)
-        extracted_fullname = extract_name(text)
-        
-        # Reconstruct full ground-truth name
-        gt_parts = [row["label_nombre"], row["label_paterno"], row["label_materno"]]
-        gt_fullname = " ".join([str(p).strip() for p in gt_parts if pd.notna(p) and str(p).strip()])
-        
-        gt_motivo = row["label_motivo"]
-        
-        # Clean both for comparison
-        def clean_str(s):
-            return re.sub(r"[^A-Z0-9]+", "", str(s).upper())
-        
-        c_ext = clean_str(extracted_fullname)
-        c_gt = clean_str(gt_fullname)
-        
-        # Fuzzy bigram similarity for OCR typo robustness
-        sim = bigram_similarity(c_ext, c_gt)
-        
-        # Check match (exact, substring, or fuzzy similarity >= 0.60)
-        is_name_correct = (c_ext == c_gt) or (len(c_gt) > 4 and c_gt in c_ext) or (len(c_ext) > 4 and c_ext in c_gt) or (sim >= 0.60)
-        is_motivo_correct = clean_str(extracted_oficio) == clean_str(gt_motivo)
-        
-        if is_name_correct:
-            name_correct_count += 1
-        if is_motivo_correct:
-            motivo_correct_count += 1
-            
-        is_company = is_moral_entity(extracted_fullname)
-        nombre, paterno, materno = split_full_name(extracted_fullname, is_company)
-        
-        matched_records.append({
-            "PDF Name": pdf_name,
-            "GT Movement": row["label_movement"],
-            "Pred Movement": pred_movement,
-            "GT Name": gt_fullname,
-            "Extracted Name": extracted_fullname,
-            "Is Name Match": is_name_correct,
-            "GT Oficio": gt_motivo,
-            "Extracted Oficio": extracted_oficio,
-            "Is Oficio Match": is_motivo_correct,
-            "Is Company": is_company,
-            "Nombre": nombre,
-            "Paterno": paterno,
-            "Materno": materno
-        })
-        
-    df_results = pd.DataFrame(matched_records)
-    print("\n=== METADATA EXTRACTION ACCURACY ===")
-    print(f"Office Number Match Rate: {motivo_correct_count}/{len(df)} ({motivo_correct_count/len(df)*100:.2f}%)")
-    print(f"Name Match Rate (Fuzzy/Cleaned): {name_correct_count}/{len(df)} ({name_correct_count/len(df)*100:.2f}%)")
-    
-    # Save a sample comparison CSV
-    df_results.to_csv("metadata_extraction_validation.csv", index=False)
-    print("\nSaved evaluation results to metadata_extraction_validation.csv.")
-    
-    # Show some mismatches to help refine rules
-    mismatches = df_results[df_results["Is Name Match"] == False].head(10)
-    if len(mismatches) > 0:
-        print("\nFirst 10 Name Extraction Mismatches:")
-        for idx, r in mismatches.iterrows():
-            print(f"  - PDF: {r['PDF Name']}")
-            print(f"    GT Name:        {r['GT Name']}")
-            print(f"    Extracted Name: {r['Extracted Name']}")
-            
-if __name__ == "__main__":
-    main()
+def extract_name(text: str) -> str:
+    """Nombre de la persona o razón social del oficio, en mayúsculas, o "N/A"."""
+    text_clean = _join_corporate_suffixes(_BLANKS_RE.sub(" ", text))
+    lines = [s for s in (line.strip() for line in text_clean.split("\n")) if s]
+    return _from_phrases(text_clean) or _from_table(lines) or _from_uppercase_line(lines) or "N/A"
