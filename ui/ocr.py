@@ -170,7 +170,7 @@ def run_ocr(
     workers: Optional[int] = None,
 ) -> List[OcrResult]:
     """OCR en paralelo de todos los PDFs de *pdf_folder*, en el orden de find_pdfs().
-    *workers* son los PDFs leídos a la vez (por defecto, CORES_LIMIT)."""
+    *workers* son los PDFs leídos a la vez (por defecto, todos los disponibles)."""
     pdf_files = find_pdfs(pdf_folder)
     if not pdf_files:
         progress_cb(1.0, "⚠ No PDF files found in the selected folder.")
