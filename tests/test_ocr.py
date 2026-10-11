@@ -129,3 +129,36 @@ def test_engine_not_loaded_when_everything_is_cached(pdf_tree, tmp_path, fake_re
     assert fake.calls == 2
     ocr.run_ocr(str(pdf_tree), lambda p, m: None)
     assert fake.calls == 2  # segunda corrida: todo desde caché
+
+
+# ---------------------------------------------------------------------------
+# Barra de núcleos: PDFs leídos a la vez
+# ---------------------------------------------------------------------------
+
+def test_clamp_cores():
+    import ui.cpu_limits as cpu
+
+    assert cpu.clamp_cores(None) == cpu.CORES_LIMIT  # por defecto, lo de siempre
+    assert cpu.clamp_cores(0) == 1
+    assert cpu.clamp_cores(-3) == 1
+    assert cpu.clamp_cores(cpu.AVAILABLE_CORES + 50) == cpu.AVAILABLE_CORES
+    assert cpu.clamp_cores(1.0) == 1  # el slider entrega float
+    assert 1 <= cpu.CORES_LIMIT <= cpu.AVAILABLE_CORES
+
+
+@pytest.mark.parametrize("workers, expected", [(None, "default"), (1, 1), (10_000, "all")])
+def test_run_ocr_uses_requested_cores(pdf_tree, tmp_path, fake_render, monkeypatch, workers, expected):
+    import ui.cpu_limits as cpu
+
+    monkeypatch.setattr(ocr, "transcriptions_dir", lambda: tmp_path / "cache")
+    seen = []
+    real_pool = ocr.ThreadPoolExecutor
+
+    def spy_pool(max_workers):
+        seen.append(max_workers)
+        return real_pool(max_workers=max_workers)
+
+    monkeypatch.setattr(ocr, "ThreadPoolExecutor", spy_pool)
+    results = ocr.run_ocr(str(pdf_tree), lambda p, m: None, engine=FakeEngine(), workers=workers)
+    assert [r.filename for r in results] == ["a.pdf", "c.PDF"]
+    assert seen == [{"default": cpu.CORES_LIMIT, "all": cpu.AVAILABLE_CORES}.get(expected, expected)]

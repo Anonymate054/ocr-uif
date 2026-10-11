@@ -79,7 +79,8 @@ import threading
 import flet as ft
 
 from ui.version import APP_VERSION  # noqa: E402
-from ui.pipeline import run_full_pipeline  # noqa: E402
+from ui.cpu_limits import AVAILABLE_CORES, CORES_LIMIT  # noqa: E402
+from ui.pipeline import format_summary, run_full_pipeline  # noqa: E402
 
 
 # ── Design tokens ────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ async def main(page: ft.Page) -> None:
     page.bgcolor = BG
     page.padding = 0
     page.width  = 560
-    page.height = 540
+    page.height = 620
     page.theme = ft.Theme(
         color_scheme=ft.ColorScheme(
             primary=ACCENT,
@@ -129,6 +130,7 @@ async def main(page: ft.Page) -> None:
     input_folder:  list[str] = [""]
     output_folder: list[str] = [""]
     cancel_event = threading.Event()
+    cores:         list[int] = [CORES_LIMIT]
 
     # ── Path display fields (read-only TextField — users cannot type) ─────────
     tf_input = ft.TextField(
@@ -163,6 +165,30 @@ async def main(page: ft.Page) -> None:
         content_padding=ft.Padding(left=12, right=12, top=0, bottom=0),
         cursor_color=ACCENT,
     )
+
+    # ── Cores slider (PDFs leídos a la vez; por defecto el 70 % del equipo) ───
+    cores_lbl = ft.Text(
+        f"{CORES_LIMIT} de {AVAILABLE_CORES}", color=TEXT, size=12,
+        weight=ft.FontWeight.W_500,
+    )
+    slider_cores = ft.Slider(
+        min=1,
+        max=max(AVAILABLE_CORES, 2),  # el slider necesita min < max
+        divisions=max(AVAILABLE_CORES - 1, 1),
+        value=CORES_LIMIT,
+        label="{value}",
+        active_color=ACCENT,
+        inactive_color=BORDER,
+        expand=True,
+        disabled=AVAILABLE_CORES < 2,
+    )
+
+    def _on_cores(e) -> None:
+        cores[0] = max(1, min(int(round(slider_cores.value)), AVAILABLE_CORES))
+        cores_lbl.value = f"{cores[0]} de {AVAILABLE_CORES}"
+        page.update()
+
+    slider_cores.on_change = _on_cores
 
     # ── Processing centre ─────────────────────────────────────────────────────
     progress_ring = ft.ProgressRing(
@@ -259,9 +285,10 @@ async def main(page: ft.Page) -> None:
             "Sigue estos sencillos pasos para procesar los documentos:\n\n"
             "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
             "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
-            "3. Haz clic en el botón 'Procesar' para iniciar la extracción.\n\n"
-            "4. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
-            "5. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
+            "3. (Opcional) Mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa el 70 % de los núcleos.\n\n"
+            "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas.\n\n"
+            "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
+            "6. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
         )
 
         dlg = ft.AlertDialog(
@@ -368,6 +395,7 @@ async def main(page: ft.Page) -> None:
 
         btn_run.disabled      = True
         btn_exit.disabled     = True
+        slider_cores.disabled = True
         btn_cancel.visible    = True
         progress_ring.visible = True
         check_icon.visible    = False
@@ -379,33 +407,35 @@ async def main(page: ft.Page) -> None:
 
         def _work() -> None:
             try:
-                result = run_full_pipeline(input_folder[0], output_folder[0], _progress_cb, cancel_event)
-                page.run_task(_set_done, len(getattr(result, "errors", [])))
+                result = run_full_pipeline(input_folder[0], output_folder[0], _progress_cb,
+                                           cancel_event, workers=cores[0])
+                page.run_task(_set_done, len(result.errors), format_summary(result))
             except Exception as exc:
                 page.run_task(_set_error, str(exc))
 
         threading.Thread(target=_work, daemon=True).start()
 
-    async def _set_done(n_errors: int = 0) -> None:
+    def _unlock() -> None:
         btn_run.disabled      = False
         btn_exit.disabled     = False
+        slider_cores.disabled = AVAILABLE_CORES < 2
         btn_cancel.visible    = False
         progress_ring.visible = False
+
+    async def _set_done(n_errors: int = 0, summary: str = "") -> None:
+        _unlock()
         if n_errors:
             error_icon.visible = True
             file_lbl.value     = "Proceso completado con errores"
-            sub_lbl.value      = f"{n_errors} archivo(s) sin procesar · ver _errores.csv"
+            sub_lbl.value      = f"{summary}\n{n_errors} archivo(s) sin procesar · ver _errores.csv"
         else:
             check_icon.visible = True
             file_lbl.value     = "Proceso completado"
-            sub_lbl.value      = ""
+            sub_lbl.value      = summary
         page.update()
 
     async def _set_error(msg: str) -> None:
-        btn_run.disabled      = False
-        btn_exit.disabled     = False
-        btn_cancel.visible    = False
-        progress_ring.visible = False
+        _unlock()
         if "Proceso cancelado" in msg:
             check_icon.visible = False
             error_icon.visible = False
@@ -501,6 +531,19 @@ async def main(page: ft.Page) -> None:
                 _field_group("Carpeta de PDFs", tf_input, _pick_input),
                 ft.Divider(color=BORDER, height=1),
                 _field_group("Carpeta de salida (CSV)", tf_output, _pick_output),
+                ft.Divider(color=BORDER, height=1),
+                ft.Column(
+                    spacing=0,
+                    controls=[
+                        ft.Text("Núcleos de procesamiento", color=MUTED, size=11,
+                                weight=ft.FontWeight.W_600),
+                        ft.Row(
+                            controls=[slider_cores, cores_lbl],
+                            spacing=8,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                    ],
+                ),
             ],
         ),
     )
