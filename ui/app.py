@@ -111,12 +111,58 @@ def _border_all(width: int, color: str) -> ft.border.Border:
     return ft.border.Border(top=s, right=s, bottom=s, left=s)
 
 
+def cores_settings(cores: list[int], on_change=None) -> ft.Column:
+    """Contenido de Ajustes: barra de núcleos (PDFs leídos a la vez, de 1 a
+    AVAILABLE_CORES). Guarda la elección en cores[0] y avisa con on_change()."""
+    lbl = ft.Text(
+        f"{cores[0]} de {AVAILABLE_CORES}", color=TEXT, size=12,
+        weight=ft.FontWeight.W_500,
+    )
+    slider = ft.Slider(
+        min=1,
+        max=max(AVAILABLE_CORES, 2),  # el slider necesita min < max
+        divisions=max(AVAILABLE_CORES - 1, 1),
+        value=cores[0],
+        label="{value}",
+        active_color=ACCENT,
+        inactive_color=BORDER,
+        expand=True,
+        disabled=AVAILABLE_CORES < 2,
+    )
+
+    def _on_slide(_=None) -> None:
+        cores[0] = max(1, min(int(round(slider.value)), AVAILABLE_CORES))
+        lbl.value = f"{cores[0]} de {AVAILABLE_CORES}"
+        if on_change:
+            on_change()
+
+    slider.on_change = _on_slide
+    return ft.Column(
+        spacing=4,
+        tight=True,
+        controls=[
+            ft.Text("Núcleos de procesamiento", color=MUTED, size=11,
+                    weight=ft.FontWeight.W_600),
+            ft.Row(
+                controls=[slider, lbl],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Text(
+                f"Más núcleos procesan más rápido; menos dejan libre el equipo. "
+                f"Por defecto: {CORES_LIMIT}.",
+                color=MUTED, size=11,
+            ),
+        ],
+    )
+
+
 async def main(page: ft.Page) -> None:
     page.title = f"OCR-UIF · {APP_VERSION}"
     page.bgcolor = BG
     page.padding = 0
     page.width  = 560
-    page.height = 620
+    page.height = 540
     page.theme = ft.Theme(
         color_scheme=ft.ColorScheme(
             primary=ACCENT,
@@ -166,30 +212,6 @@ async def main(page: ft.Page) -> None:
         cursor_color=ACCENT,
     )
 
-    # ── Cores slider (PDFs leídos a la vez; por defecto el 70 % del equipo) ───
-    cores_lbl = ft.Text(
-        f"{CORES_LIMIT} de {AVAILABLE_CORES}", color=TEXT, size=12,
-        weight=ft.FontWeight.W_500,
-    )
-    slider_cores = ft.Slider(
-        min=1,
-        max=max(AVAILABLE_CORES, 2),  # el slider necesita min < max
-        divisions=max(AVAILABLE_CORES - 1, 1),
-        value=CORES_LIMIT,
-        label="{value}",
-        active_color=ACCENT,
-        inactive_color=BORDER,
-        expand=True,
-        disabled=AVAILABLE_CORES < 2,
-    )
-
-    def _on_cores(e) -> None:
-        cores[0] = max(1, min(int(round(slider_cores.value)), AVAILABLE_CORES))
-        cores_lbl.value = f"{cores[0]} de {AVAILABLE_CORES}"
-        page.update()
-
-    slider_cores.on_change = _on_cores
-
     # ── Processing centre ─────────────────────────────────────────────────────
     progress_ring = ft.ProgressRing(
         width=52, height=52, stroke_width=3,
@@ -233,6 +255,14 @@ async def main(page: ft.Page) -> None:
     btn_cancel = ft.TextButton(
         content=ft.Text("Cancelar", color=ERROR, size=12, weight=ft.FontWeight.W_500),
         visible=False,
+    )
+
+    # ── Settings button (header) ──────────────────────────────────────────────
+    btn_settings = ft.IconButton(
+        icon=ft.Icons.SETTINGS_ROUNDED,
+        icon_color="#FFFFFF",
+        icon_size=20,
+        tooltip="Ajustes",
     )
 
     # ── Exit button ───────────────────────────────────────────────────────────
@@ -285,7 +315,7 @@ async def main(page: ft.Page) -> None:
             "Sigue estos sencillos pasos para procesar los documentos:\n\n"
             "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
             "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
-            "3. (Opcional) Mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa el 70 % de los núcleos.\n\n"
+            "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa el 70 % de los núcleos.\n\n"
             "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas.\n\n"
             "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
             "6. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
@@ -349,6 +379,35 @@ async def main(page: ft.Page) -> None:
         dlg.open = True
         page.update()
 
+    # ── Settings dialog ───────────────────────────────────────────────────────
+    async def _show_settings(_) -> None:
+        async def _close(_) -> None:
+            dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Ajustes", color=TEXT, size=15,
+                          weight=ft.FontWeight.W_600),
+            content=ft.Container(
+                width=420,
+                content=cores_settings(cores, page.update),
+            ),
+            bgcolor=SURFACE,
+            actions=[
+                ft.TextButton(
+                    content=ft.Text("Listo", color=ACCENT, size=13),
+                    on_click=lambda e: page.run_task(_close, e),
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
+    btn_settings.on_click = lambda e: page.run_task(_show_settings, e)
+
     # ── Pipeline ──────────────────────────────────────────────────────────────
     def _progress_cb(pct: float, msg: str) -> None:
         filename = ""
@@ -395,7 +454,7 @@ async def main(page: ft.Page) -> None:
 
         btn_run.disabled      = True
         btn_exit.disabled     = True
-        slider_cores.disabled = True
+        btn_settings.disabled = True
         btn_cancel.visible    = True
         progress_ring.visible = True
         check_icon.visible    = False
@@ -418,7 +477,7 @@ async def main(page: ft.Page) -> None:
     def _unlock() -> None:
         btn_run.disabled      = False
         btn_exit.disabled     = False
-        slider_cores.disabled = AVAILABLE_CORES < 2
+        btn_settings.disabled = False
         btn_cancel.visible    = False
         progress_ring.visible = False
 
@@ -509,6 +568,7 @@ async def main(page: ft.Page) -> None:
                                 size=11, color="#FFFFFFAA"),
                     ],
                 ),
+                btn_settings,
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -531,19 +591,6 @@ async def main(page: ft.Page) -> None:
                 _field_group("Carpeta de PDFs", tf_input, _pick_input),
                 ft.Divider(color=BORDER, height=1),
                 _field_group("Carpeta de salida (CSV)", tf_output, _pick_output),
-                ft.Divider(color=BORDER, height=1),
-                ft.Column(
-                    spacing=0,
-                    controls=[
-                        ft.Text("Núcleos de procesamiento", color=MUTED, size=11,
-                                weight=ft.FontWeight.W_600),
-                        ft.Row(
-                            controls=[slider_cores, cores_lbl],
-                            spacing=8,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                    ],
-                ),
             ],
         ),
     )
