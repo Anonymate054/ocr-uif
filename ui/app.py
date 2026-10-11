@@ -79,7 +79,8 @@ import threading
 import flet as ft
 
 from ui.version import APP_VERSION  # noqa: E402
-from ui.pipeline import run_full_pipeline  # noqa: E402
+from ui.cpu_limits import AVAILABLE_CORES, DEFAULT_CORES  # noqa: E402
+from ui.pipeline import format_summary, run_full_pipeline  # noqa: E402
 
 
 # ── Design tokens ────────────────────────────────────────────────────────────
@@ -110,6 +111,52 @@ def _border_all(width: int, color: str) -> ft.border.Border:
     return ft.border.Border(top=s, right=s, bottom=s, left=s)
 
 
+def cores_settings(cores: list[int], on_change=None) -> ft.Column:
+    """Contenido de Ajustes: barra de núcleos (PDFs leídos a la vez, de 1 a
+    AVAILABLE_CORES). Guarda la elección en cores[0] y avisa con on_change()."""
+    lbl = ft.Text(
+        f"{cores[0]} de {AVAILABLE_CORES}", color=TEXT, size=12,
+        weight=ft.FontWeight.W_500,
+    )
+    slider = ft.Slider(
+        min=1,
+        max=max(AVAILABLE_CORES, 2),  # el slider necesita min < max
+        divisions=max(AVAILABLE_CORES - 1, 1),
+        value=cores[0],
+        label="{value}",
+        active_color=ACCENT,
+        inactive_color=BORDER,
+        expand=True,
+        disabled=AVAILABLE_CORES < 2,
+    )
+
+    def _on_slide(_=None) -> None:
+        cores[0] = max(1, min(int(round(slider.value)), AVAILABLE_CORES))
+        lbl.value = f"{cores[0]} de {AVAILABLE_CORES}"
+        if on_change:
+            on_change()
+
+    slider.on_change = _on_slide
+    return ft.Column(
+        spacing=4,
+        tight=True,
+        controls=[
+            ft.Text("Núcleos de procesamiento", color=MUTED, size=11,
+                    weight=ft.FontWeight.W_600),
+            ft.Row(
+                controls=[slider, lbl],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Text(
+                f"Más núcleos procesan más rápido; menos dejan libre el equipo. "
+                f"Por defecto: los {DEFAULT_CORES} disponibles.",
+                color=MUTED, size=11,
+            ),
+        ],
+    )
+
+
 async def main(page: ft.Page) -> None:
     page.title = f"OCR-UIF · {APP_VERSION}"
     page.bgcolor = BG
@@ -129,6 +176,7 @@ async def main(page: ft.Page) -> None:
     input_folder:  list[str] = [""]
     output_folder: list[str] = [""]
     cancel_event = threading.Event()
+    cores:         list[int] = [DEFAULT_CORES]
 
     # ── Path display fields (read-only TextField — users cannot type) ─────────
     tf_input = ft.TextField(
@@ -209,6 +257,14 @@ async def main(page: ft.Page) -> None:
         visible=False,
     )
 
+    # ── Settings button (header) ──────────────────────────────────────────────
+    btn_settings = ft.IconButton(
+        icon=ft.Icons.SETTINGS_ROUNDED,
+        icon_color="#FFFFFF",
+        icon_size=20,
+        tooltip="Ajustes",
+    )
+
     # ── Exit button ───────────────────────────────────────────────────────────
     btn_exit = ft.OutlinedButton(
         content=ft.Row(
@@ -259,9 +315,10 @@ async def main(page: ft.Page) -> None:
             "Sigue estos sencillos pasos para procesar los documentos:\n\n"
             "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
             "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
-            "3. Haz clic en el botón 'Procesar' para iniciar la extracción.\n\n"
-            "4. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
-            "5. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
+            "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa todos los núcleos disponibles.\n\n"
+            "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas.\n\n"
+            "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón 'Cancelar' que aparecerá debajo del indicador de progreso.\n\n"
+            "6. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
         )
 
         dlg = ft.AlertDialog(
@@ -322,6 +379,35 @@ async def main(page: ft.Page) -> None:
         dlg.open = True
         page.update()
 
+    # ── Settings dialog ───────────────────────────────────────────────────────
+    async def _show_settings(_) -> None:
+        async def _close(_) -> None:
+            dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Ajustes", color=TEXT, size=15,
+                          weight=ft.FontWeight.W_600),
+            content=ft.Container(
+                width=420,
+                content=cores_settings(cores, page.update),
+            ),
+            bgcolor=SURFACE,
+            actions=[
+                ft.TextButton(
+                    content=ft.Text("Listo", color=ACCENT, size=13),
+                    on_click=lambda e: page.run_task(_close, e),
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
+    btn_settings.on_click = lambda e: page.run_task(_show_settings, e)
+
     # ── Pipeline ──────────────────────────────────────────────────────────────
     def _progress_cb(pct: float, msg: str) -> None:
         filename = ""
@@ -368,6 +454,7 @@ async def main(page: ft.Page) -> None:
 
         btn_run.disabled      = True
         btn_exit.disabled     = True
+        btn_settings.disabled = True
         btn_cancel.visible    = True
         progress_ring.visible = True
         check_icon.visible    = False
@@ -379,33 +466,35 @@ async def main(page: ft.Page) -> None:
 
         def _work() -> None:
             try:
-                result = run_full_pipeline(input_folder[0], output_folder[0], _progress_cb, cancel_event)
-                page.run_task(_set_done, len(getattr(result, "errors", [])))
+                result = run_full_pipeline(input_folder[0], output_folder[0], _progress_cb,
+                                           cancel_event, workers=cores[0])
+                page.run_task(_set_done, len(result.errors), format_summary(result))
             except Exception as exc:
                 page.run_task(_set_error, str(exc))
 
         threading.Thread(target=_work, daemon=True).start()
 
-    async def _set_done(n_errors: int = 0) -> None:
+    def _unlock() -> None:
         btn_run.disabled      = False
         btn_exit.disabled     = False
+        btn_settings.disabled = False
         btn_cancel.visible    = False
         progress_ring.visible = False
+
+    async def _set_done(n_errors: int = 0, summary: str = "") -> None:
+        _unlock()
         if n_errors:
             error_icon.visible = True
             file_lbl.value     = "Proceso completado con errores"
-            sub_lbl.value      = f"{n_errors} archivo(s) sin procesar · ver _errores.csv"
+            sub_lbl.value      = f"{summary}\n{n_errors} archivo(s) sin procesar · ver _errores.csv"
         else:
             check_icon.visible = True
             file_lbl.value     = "Proceso completado"
-            sub_lbl.value      = ""
+            sub_lbl.value      = summary
         page.update()
 
     async def _set_error(msg: str) -> None:
-        btn_run.disabled      = False
-        btn_exit.disabled     = False
-        btn_cancel.visible    = False
-        progress_ring.visible = False
+        _unlock()
         if "Proceso cancelado" in msg:
             check_icon.visible = False
             error_icon.visible = False
@@ -479,6 +568,7 @@ async def main(page: ft.Page) -> None:
                                 size=11, color="#FFFFFFAA"),
                     ],
                 ),
+                btn_settings,
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
