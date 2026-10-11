@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -28,6 +28,9 @@ RENDER_DPI = 96
 
 # Carpetas que nunca contienen oficios a procesar
 SKIPPED_DIRS = {"test", "dist", "build", "transcriptions", ".venv", ".git", "old"}
+
+# Cada cuánto se revisa el botón Cancelar mientras se leen los PDFs (segundos)
+CANCEL_POLL_S = 0.2
 
 REC_MODEL = "en_PP-OCRv4_rec_infer.onnx"
 REC_DICT = "en_dict.txt"
@@ -170,7 +173,7 @@ def run_ocr(
     workers: Optional[int] = None,
 ) -> List[OcrResult]:
     """OCR en paralelo de todos los PDFs de *pdf_folder*, en el orden de find_pdfs().
-    *workers* son los PDFs leídos a la vez (por defecto, todos los disponibles)."""
+    *workers* son los PDFs leídos a la vez (por defecto, el 70 % de los disponibles)."""
     pdf_files = find_pdfs(pdf_folder)
     if not pdf_files:
         progress_cb(1.0, "⚠ No PDF files found in the selected folder.")
@@ -189,23 +192,32 @@ def run_ocr(
     results: List[Optional[OcrResult]] = [None] * total
     workers = ui.cpu_limits.clamp_cores(workers)
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {
             executor.submit(ocr_pdf, engine, name, path, cache_dir): i
             for i, (name, path) in enumerate(pdf_files)
         }
-        for done, future in enumerate(as_completed(futures), start=1):
+        pending, done = set(futures), 0
+        while pending:
+            # Se revisa Cancelar cada CANCEL_POLL_S aunque un PDF se quede
+            # atorado: el botón responde sin esperar a que termine ese archivo.
             if cancel_event is not None and cancel_event.is_set():
-                for f in futures:
-                    f.cancel()
                 raise Cancelled()
-            res = future.result()
-            results[futures[future]] = res
-            if res.error:
-                msg = f"  ✗ Error on {res.filename}: {res.error}"
-            else:
-                msg = f"[{done}/{total}] {'Cached' if res.cached else 'OCR'}: {res.filename}"
-            progress_cb(done / total, msg)
+            finished, pending = wait(pending, timeout=CANCEL_POLL_S, return_when=FIRST_COMPLETED)
+            for future in finished:
+                done += 1
+                res = future.result()
+                results[futures[future]] = res
+                if res.error:
+                    msg = f"  ✗ Error on {res.filename}: {res.error}"
+                else:
+                    msg = f"[{done}/{total}] {'Cached' if res.cached else 'OCR'}: {res.filename}"
+                progress_cb(done / total, msg)
+    finally:
+        # Sin esperar: al cancelar, los PDFs en curso terminan solos en segundo
+        # plano y los que no empezaron se descartan.
+        executor.shutdown(wait=False, cancel_futures=True)
 
     progress_cb(1.0, f"[OK] OCR complete - {total} file(s) processed.")
     return results
