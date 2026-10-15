@@ -25,7 +25,7 @@ from ui.ocr import Cancelled, OcrResult, run_ocr
 from ui.paths import models_dir, project_root
 
 __all__ = [
-    "Cancelled", "OcrResult", "PipelineResult", "run_ocr", "run_nlp_and_predict",
+    "Cancelled", "OcrResult", "PipelineResult", "run_ocr", "run_nlp_and_predict", "train_classifier",
     "build_record", "run_output", "run_full_pipeline", "format_summary",
 ]
 
@@ -74,6 +74,20 @@ def _check_cancel(cancel_event: Optional[threading.Event]) -> None:
 # FASE 2 — Clasificador TF-IDF + SVM (ALTA / BAJA)
 # ---------------------------------------------------------------------------
 
+def train_classifier(texts, labels) -> Tuple[object, object]:
+    """TF-IDF (palabras y pares de palabras) + SVM lineal calibrada, la
+    configuración del modelo publicado en models/. Devuelve (vectorizer, classifier)."""
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.svm import SVC
+
+    vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+    base_clf = SVC(kernel="linear", class_weight="balanced", random_state=42)
+    clf = CalibratedClassifierCV(base_clf, ensemble=False)
+    clf.fit(vectorizer.fit_transform(texts), labels)
+    return vectorizer, clf
+
+
 def run_nlp_and_predict(ocr_results, progress_cb: ProgressCallback) -> Tuple[object, object]:
     """
     Carga el modelo SVM preentrenado de models/ o, si no existe, lo entrena
@@ -90,30 +104,17 @@ def run_nlp_and_predict(ocr_results, progress_cb: ProgressCallback) -> Tuple[obj
         return vectorizer, clf
 
     import pandas as pd
-    from sklearn.calibration import CalibratedClassifierCV
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.svm import SVC
 
     parquet_path = project_root() / "files_dataset.parquet"
     if not parquet_path.exists():
         raise FileNotFoundError(
             "files_dataset.parquet not found and no pre-trained model exists.\n"
-            "Run build_dataset.py first to generate training data."
+            "Run scripts/train_classifier.py to train the model."
         )
 
     progress_cb(0.1, "Training TF-IDF + SVM model…")
     df_matched = pd.read_parquet(str(parquet_path))
-
-    X_train_text = df_matched["extracted_text"].values
-    y_train = df_matched["label_movement"].values
-
-    vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
-    X_train_vec = vectorizer.fit_transform(X_train_text)
-
-    progress_cb(0.5, "Fitting SVM classifier (this may take a minute)…")
-    base_clf = SVC(kernel="linear", class_weight="balanced", random_state=42)
-    clf = CalibratedClassifierCV(base_clf, ensemble=False)
-    clf.fit(X_train_vec, y_train)
+    vectorizer, clf = train_classifier(df_matched["extracted_text"].values, df_matched["label_movement"].values)
 
     models_dir().mkdir(exist_ok=True)
     joblib.dump(vectorizer, vect_path)
