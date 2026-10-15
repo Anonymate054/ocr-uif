@@ -35,6 +35,7 @@ ocr-uif/
 │   └── svm_classifier_model.joblib # SVM classifier predicting document status
 ├── tests/                       # Unit tests (python -m pytest tests)
 ├── scripts/evaluate_outputs.py  # Compares output CSVs with reference CSVs
+├── scripts/train_classifier.py  # Retrains the TF-IDF + SVM classifier with the app's OCR
 ├── build_windows_exe.sh         # Packaging script for Wine emulation
 ├── OCR-UIF.spec                 # PyInstaller spec configuration
 ├── requirements.txt             # Production dependencies
@@ -164,6 +165,7 @@ The backend (implemented in `ui/pipeline.py`) uses a two-stage hybrid architectu
 * **How it works:**
   * **Feature Extraction:** Reconstructed text is processed by a **TF-IDF Vectorizer** (`models/tfidf_vectorizer.joblib`) to extract word and bigram patterns.
   * **Prediction:** A pre-trained **Support Vector Machine (SVM) Classifier** (`models/svm_classifier_model.joblib`) analyzes the text features.
+  * **Retraining:** `python scripts/train_classifier.py files` reads every PDF with the app's own OCR (`en_PP-OCRv4`), labels it with the `MOVIMIENTO` of its reference CSV and rewrites the three models in `models/`. Since v2.3.4 the model is trained on the current OCR, which keeps words apart; the previous model had been trained on text with run-together words (1,032 such terms in its vocabulary).
   * **Validation Benchmarks:** During test evaluations, the SVM classifier achieved **100% classification accuracy** (perfect precision and recall), ensuring absolute reliability in document status determination.
 
 ##### NLP Classification Model Benchmarks & Strategies
