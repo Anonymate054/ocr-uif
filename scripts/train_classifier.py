@@ -43,7 +43,7 @@ def clean_name(name: str) -> str:
 
 
 def office_number(text: str) -> Optional[str]:
-    """Número de oficio normalizado: "110/K/2001/2026" -> "110_oficio_sintetico"."""
+    """Número de oficio normalizado: "110/K/2001/2026" -> "110_k_2001_2026"."""
     m = OFFICE_RE.search(text or "")
     return re.sub(r"[/\-\s_]+", "_", m.group(0).lower()) if m else None
 
