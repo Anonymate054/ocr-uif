@@ -195,3 +195,28 @@ def test_cancel_does_not_wait_for_a_stuck_pdf(pdf_tree, tmp_path, fake_render, m
         assert time.monotonic() - start < 3
     finally:
         release.set()
+
+
+# ---------------------------------------------------------------------------
+# Caché escrita de forma atómica
+# ---------------------------------------------------------------------------
+
+def test_write_cache_leaves_no_temp_files(tmp_path):
+    target = tmp_path / "abc.txt"
+    ocr.write_cache(target, "JUAN PEREZ")
+    ocr.write_cache(target, "JUAN PEREZ LOPEZ")  # sobrescribe sin error
+    assert target.read_text(encoding="utf-8") == "JUAN PEREZ LOPEZ"
+    assert [p.name for p in tmp_path.iterdir()] == ["abc.txt"]
+
+
+def test_write_cache_failure_keeps_no_partial_file(tmp_path, monkeypatch):
+    """Si el renombrado falla (app cerrada a la mitad), no queda caché truncada."""
+    target = tmp_path / "abc.txt"
+
+    def boom(src, dst):
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr(ocr.os, "replace", boom)
+    with pytest.raises(OSError):
+        ocr.write_cache(target, "texto")
+    assert list(tmp_path.iterdir()) == []

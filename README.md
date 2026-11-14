@@ -159,7 +159,8 @@ The backend (implemented in `ui/pipeline.py`) uses a two-stage hybrid architectu
   * **Character set:** `models/en_dict.txt` is ASCII only, so the model never outputs `Ñ` or accented vowels (`SALDAÑA` is read as `SALDANA`, `RAMÍREZ` often as `RAMFREZ`). Stage 3 repairs this.
   * **Cache:** Each transcription is cached under a hash of the PDF contents plus `OCR_CACHE_TAG` (in `ui/ocr.py`). Running from source it goes to `transcriptions/`; the `.exe` uses `%LOCALAPPDATA%\OCR-UIF\transcriptions`, never the folder next to the executable. Change `OCR_CACHE_TAG` whenever the OCR model, DPI or pages change.
   * **Speed:** Recognition is about 87 % of the run time. PDFs are processed in parallel (70 % of the cores) with one shared engine, which measured faster than one engine per thread. Disabling the angle classifier or batching recognition did not speed it up and changed the text, so they are left at their defaults. When every PDF is already cached, the OCR models are not loaded at all.
-  * **Errors:** A PDF that fails (unreadable file, no text found) gets no CSV; it is listed in `_errores.csv` in the output folder and the app shows how many failed.
+  * **Errors:** A PDF that fails (unreadable file, no text found) gets no CSV; it is listed in `_errores.csv` in the output folder and the app shows how many failed. A CSV that was written without a name or without an office number is listed in `_revisar.csv` for manual review, and the final summary shows how many need review. Both reports are removed at the start of each run, so a cancelled run never leaves the previous run's reports behind.
+  * **Cache writes are atomic:** each transcription is written to a temporary file and renamed, so closing the app mid-write never leaves a truncated transcription in the cache.
 
 #### 2. Stage 2: Offline NLP Document Classifier (TF-IDF + SVM Classifier)
 * **How it works:**

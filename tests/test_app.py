@@ -40,3 +40,36 @@ def test_reopening_settings_keeps_the_choice():
     slider.on_change(None)
     slider, label = _slider_and_label(app.cores_settings(cores))
     assert slider.value == 1 and label.value == f"1 de {AVAILABLE_CORES}"
+
+
+# ---------------------------------------------------------------------------
+# Mensaje final del lote
+# ---------------------------------------------------------------------------
+
+from ui.pipeline import Cancelled, PipelineResult  # noqa: E402
+
+
+def test_done_status_ok():
+    result = PipelineResult(["a.csv"], summary={"ALTA": 1})
+    assert app.done_status(result) == ("ok", "Proceso completado", "1 clasificado · 1 alta · 0 bajas")
+
+
+def test_done_status_with_errors():
+    result = PipelineResult(["a.csv"], errors=[("roto.pdf", "x")], summary={"ALTA": 1})
+    icon, title, detail = app.done_status(result)
+    assert (icon, title) == ("error", "Proceso completado con errores")
+    assert detail.endswith("1 archivo(s) sin procesar · ver _errores.csv")
+
+
+def test_done_status_with_rows_to_review():
+    result = PipelineResult(["a.csv"], summary={"BAJA": 1}, review=[("a.csv", "sin nombre")])
+    icon, title, detail = app.done_status(result)
+    assert icon == "error" and "revisa" in title
+    assert detail.endswith("ver _revisar.csv")
+
+
+def test_failure_status_detects_cancel_by_type():
+    assert app.failure_status(Cancelled()) == ("none", "Proceso cancelado", "")
+    # Un error cualquiera, aunque mencione la palabra, no es una cancelación
+    assert app.failure_status(RuntimeError("Proceso cancelado por disco lleno"))[0] == "error"
+    assert app.failure_status(ValueError()) == ("error", "Error al procesar", "ValueError")
