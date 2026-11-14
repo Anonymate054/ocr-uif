@@ -14,6 +14,7 @@ Todas las fases reciben progress_cb(pct: float, message: str) para la UI.
 from __future__ import annotations
 
 import csv
+import re
 import threading
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
@@ -43,12 +44,12 @@ REVIEW_REPORT = "_revisar.csv"
 MOVEMENTS = ("ALTA", "BAJA")
 
 # Por debajo de esta probabilidad, el ALTA/BAJA se marca para revisión manual.
-# Con los 116 oficios de prueba la mínima es 0.63 (un caso dudoso real) y el
-# resto queda arriba de 0.98.
+# Con los 116 oficios de prueba la mínima es 0.72 (un caso dudoso real) y el
+# resto queda arriba de 0.95.
 MIN_CONFIDENCE = 0.90
 # Términos del vocabulario TF-IDF que debe tener un oficio. Los 116 de prueba
-# tienen 348 o más; un texto que no es oficio (una factura) tiene 2 o 3, y aun
-# así el modelo le daría ALTA o BAJA con 0.99 de confianza.
+# tienen 271 o más; un texto que no es oficio (una factura) tiene 1 o 2, y aun
+# así el modelo le daría ALTA o BAJA con mucha confianza.
 MIN_KNOWN_TERMS = 100
 
 
@@ -95,14 +96,38 @@ def _check_cancel(cancel_event: Optional[threading.Event]) -> None:
 # FASE 2 — Clasificador TF-IDF + SVM (ALTA / BAJA)
 # ---------------------------------------------------------------------------
 
-def train_classifier(texts, labels) -> Tuple[object, object]:
+# Un término del vocabulario debe aparecer en al menos este número de oficios
+# (como máximo el 20 % del lote). Los nombres de personas y empresas aparecen en
+# uno o dos oficios, así que no entran al modelo publicado.
+MIN_DOC_FREQ = 3
+_HAS_DIGIT_RE = re.compile(r"\d")
+
+
+def safe_vocabulary(vocabulary: Iterable[str], exclude_words: Iterable[str] = ()) -> List[str]:
+    """Vocabulario sin datos sensibles: fuera los términos con dígitos (RFC,
+    números de oficio, fechas) y los que contienen una palabra de *exclude_words*
+    (los nombres de las personas y empresas del entrenamiento)."""
+    exclude = {w.lower() for w in exclude_words}
+    return sorted(
+        term for term in vocabulary
+        if not _HAS_DIGIT_RE.search(term) and not any(w in exclude for w in term.split())
+    )
+
+
+def train_classifier(texts, labels, exclude_words: Iterable[str] = ()) -> Tuple[object, object]:
     """TF-IDF (palabras y pares de palabras) + SVM lineal calibrada, la
-    configuración del modelo publicado en models/. Devuelve (vectorizer, classifier)."""
+    configuración del modelo publicado en models/. Devuelve (vectorizer, classifier).
+
+    El vocabulario solo guarda términos frecuentes y sin datos sensibles (ver
+    safe_vocabulary), porque models/ se publica en el repositorio."""
     from sklearn.calibration import CalibratedClassifierCV
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.svm import SVC
 
-    vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+    min_df = max(1, min(MIN_DOC_FREQ, len(texts) // 5))
+    probe = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=min_df).fit(texts)
+    vocabulary = safe_vocabulary(probe.vocabulary_, exclude_words)
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2), vocabulary=vocabulary)
     base_clf = SVC(kernel="linear", class_weight="balanced", random_state=42)
     clf = CalibratedClassifierCV(base_clf, ensemble=False)
     clf.fit(vectorizer.fit_transform(texts), labels)

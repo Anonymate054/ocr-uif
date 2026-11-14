@@ -147,3 +147,40 @@ def test_requirements_pin_every_dependency():
     lines = [ln.strip() for ln in req.read_text(encoding="utf-8").splitlines()
              if ln.strip() and not ln.startswith("#")]
     assert lines and all("==" in ln for ln in lines), [ln for ln in lines if "==" not in ln]
+
+
+# ---------------------------------------------------------------------------
+# El modelo publicado no guarda datos personales
+# ---------------------------------------------------------------------------
+
+def test_safe_vocabulary_drops_names_and_numbers():
+    from ui.pipeline import safe_vocabulary
+
+    vocab = ["se elimina", "marta ibanez", "ibanez", "zawe000101ab1", "110", "lista de", "de"]
+    assert safe_vocabulary(vocab, {"marta", "ibanez"}) == ["de", "lista de", "se elimina"]
+
+
+def test_train_classifier_excludes_given_words():
+    texts = [ALTA_TEXT + " MARTA IBANEZ" + f" caso{i}" for i in range(6)] + \
+            [BAJA_TEXT + " MARTA IBANEZ" + f" caso{i}" for i in range(6)]
+    labels = ["ALTA"] * 6 + ["BAJA"] * 6
+    vec, _ = train_classifier(texts, labels, exclude_words={"marta", "ibanez"})
+    assert not any(w in ("marta", "ibanez") for t in vec.vocabulary_ for w in t.split())
+    assert not any(c.isdigit() for t in vec.vocabulary_ for c in t)
+    assert not hasattr(vec, "stop_words_")  # sklearn guarda ahí los términos descartados
+
+
+def test_name_words_reads_reference_csvs(tmp_path):
+    from scripts.train_classifier import name_words
+
+    (tmp_path / "a.csv").write_text(HEADER + "ALTA,MARÍA JOSÉ,DE LA ROSA,NÚÑEZ,OFICIO NO. 1,,\n", encoding="utf-8")
+    words = name_words(["medida preventiva impuesta a GRUPO ALTAVISTA, S.A. DE C.V., con R.F.C. GAL"], tmp_path)
+    assert {"maria", "jose", "rosa", "nunez", "grupo", "altavista"} <= words
+    assert not words & {"de", "la", "sa", "cv"}
+
+
+def test_published_vocabulary_has_no_numbers_or_rare_terms(shipped):
+    vectorizer = shipped[0]
+    assert not hasattr(vectorizer, "stop_words_")
+    assert not any(c.isdigit() for term in vectorizer.vocabulary_ for c in term)
+    assert len(vectorizer.vocabulary_) < 2000  # solo términos frecuentes
