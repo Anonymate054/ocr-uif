@@ -12,7 +12,10 @@ The project follows a clean production-grade structure, separating executable co
 
 ```text
 ocr-uif/
-├── .github/workflows/tests.yml  # Runs the regression tests on every push
+├── .github/workflows/
+│   ├── tests.yml                # Lint + unit tests on every push and PR
+│   ├── build.yml                # Builds OCR-UIF.exe on Windows (downloadable artifact)
+│   └── tag-release.yml          # Creates the vX.Y.Z tag of every version on merge to master
 ├── OCR-UIF-Release/             # Standardized launch scripts & compiled apps
 │   ├── OCR-UIF.exe              # Standalone Windows GUI executable
 │   ├── run_linux.sh             # Linux execution script
@@ -36,9 +39,11 @@ ocr-uif/
 ├── tests/                       # Unit tests (python -m pytest tests)
 ├── scripts/evaluate_outputs.py  # Compares output CSVs with reference CSVs
 ├── scripts/train_classifier.py  # Retrains the TF-IDF + SVM classifier with the app's OCR
-├── build_windows_exe.sh         # Packaging script for Wine emulation
-├── OCR-UIF.spec                 # PyInstaller spec configuration
-├── requirements.txt             # Production dependencies
+├── scripts/build_exe.py         # Packages the app with flet pack (used by CI too)
+├── scripts/bump_version.py      # Bumps VERSION and ui/version.py
+├── scripts/tag_versions.py      # Creates missing version tags (run by CI)
+├── requirements.txt             # Production dependencies (exact versions)
+├── requirements-build.txt       # Packaging tools (PyInstaller, flet-cli, flet-desktop)
 └── README.md                    # This guide
 ```
 
@@ -49,7 +54,7 @@ ocr-uif/
 ## 🛠️ Environment Setup & Local Launch
 
 ### 1. Requirements
-* Python 3.11+
+* Python 3.13 (the version used by CI and the build; dependencies are pinned for it)
 * Operating System: Windows, Linux, or macOS
 
 ### 2. Standard Installation
@@ -77,54 +82,23 @@ python -m ui.app
 
 ## 📦 Compiling to Windows (.exe)
 
-The project includes an automated, offline-ready Windows executable build pipeline. It compiles the Python source code into a single, standalone `OCR-UIF.exe` using a Wine-based Docker container to emulate Windows.
+### Automatic build (recommended)
+Every push to `master`, every version tag and every pull request runs `.github/workflows/build.yml` on a Windows runner. Download `OCR-UIF.exe` from the run's **Artifacts** (GitHub → Actions → *build exe*). Copy it to `OCR-UIF-Release/` for distribution.
 
-### Prerequisites
-* **Docker** installed and running on your system (Linux/macOS/Windows).
+### Local build
+On Windows (or Linux/macOS for a native binary of that system), in a clean virtual environment:
 
-### Compilation Options
+```bash
+pip install -r requirements.txt -r requirements-build.txt
+python scripts/build_exe.py            # single file: dist/OCR-UIF.exe
+python scripts/build_exe.py --onedir   # folder: starts faster
+```
 
-You can build the executable in two ways: **natively on a Windows machine** (recommended if you have access to one) or **cross-compiling on Linux/macOS** using Docker.
+`scripts/build_exe.py` runs `flet pack` with the data the app needs (`VERSION`, `models/`, `ui/assets/` and RapidOCR's own package folder, which holds its `config.yaml`) and the hidden imports of the CRF model. It takes every path from the current environment, so it does not depend on a particular machine.
 
-#### Option A: Native Compilation on a Windows Machine (Recommended)
-If you are compiling directly on a Windows computer, you do not need Docker or Wine. Open Command Prompt (`cmd`) or PowerShell in the project directory and run:
+## Versioning and tags
 
-1. **Install dependencies offline** from the local wheel storage:
-   ```cmd
-   pip install --no-index --find-links=windows_wheels flet pymupdf rapidocr-onnxruntime scikit-learn pandas numpy joblib opencv-python pyinstaller flet-cli flet-desktop
-   ```
-
-2. **Package using Flet Pack** (includes models, assets, and RapidOCR data files):
-   ```cmd
-   flet pack ui/app.py ^
-     --name OCR-UIF ^
-     --add-data "models:models" ^
-     --add-data "ui/assets:ui/assets" ^
-     --add-data "%CONDA_PREFIX%\Lib\site-packages\rapidocr_onnxruntime:rapidocr_onnxruntime" ^
-     --product-name "OCR-UIF" ^
-     --file-version "1.0.0.0" ^
-     --product-version "1.0.0" ^
-     --onedir ^
-     --yes
-   ```
-   > **Important:** The `--add-data rapidocr_onnxruntime` flag is required. RapidOCR resolves `config.yaml` and its ONNX model files relative to its own package directory at runtime. Without this flag the exe will crash with `FileExistsError: config.yaml does not exist`.
-
-#### Option B: Cross-Compiling on Linux/macOS (via Docker & Wine)
-If you are on a Linux or macOS machine, the process is fully automated using Docker:
-
-1. Run the local build script:
-   ```bash
-   bash build_windows_exe.sh
-   ```
-2. **What the script does under the hood**:
-   * Launches a Docker container running Wine (`mymi14s/ubuntu-wine:24.04-3.11`).
-   * Installs Python packages offline using the local dependencies cached in `windows_wheels/`.
-   * Packages the initial bundle using `flet pack` and caches Flet's offline client archive (`flet-windows.zip`).
-   * Programmatically edits the generated `.spec` file via `modify_spec.py` to inject the RapidOCR ONNX model files and the offline Flet client zip.
-   * Compiles the final production standalone executable using PyInstaller.
-
-### Output
-The finalized executable is written to `dist/OCR-UIF.exe` in both options. Copy it to the `OCR-UIF-Release/` directory for portable client deployment.
+Every change bumps the version with `python scripts/bump_version.py patch|minor|major` (updates `VERSION` and `DEFAULT_VERSION` in `ui/version.py`). When the change is merged into `master`, `.github/workflows/tag-release.yml` runs `scripts/tag_versions.py --push`, which creates the `vX.Y.Z` tag of every version that does not have one yet.
 
 ---
 
@@ -159,7 +133,7 @@ The backend (implemented in `ui/pipeline.py`) uses a two-stage hybrid architectu
   * **Character set:** `models/en_dict.txt` is ASCII only, so the model never outputs `Ñ` or accented vowels (`SALDAÑA` is read as `SALDANA`, `RAMÍREZ` often as `RAMFREZ`). Stage 3 repairs this.
   * **Cache:** Each transcription is cached under a hash of the PDF contents plus `OCR_CACHE_TAG` (in `ui/ocr.py`). Running from source it goes to `transcriptions/`; the `.exe` uses `%LOCALAPPDATA%\OCR-UIF\transcriptions`, never the folder next to the executable. Change `OCR_CACHE_TAG` whenever the OCR model, DPI or pages change.
   * **Speed:** Recognition is about 87 % of the run time. PDFs are processed in parallel (70 % of the cores) with one shared engine, which measured faster than one engine per thread. Disabling the angle classifier or batching recognition did not speed it up and changed the text, so they are left at their defaults. When every PDF is already cached, the OCR models are not loaded at all.
-  * **Errors:** A PDF that fails (unreadable file, no text found) gets no CSV; it is listed in `_errores.csv` in the output folder and the app shows how many failed. A CSV that was written without a name or without an office number is listed in `_revisar.csv` for manual review, and the final summary shows how many need review. Both reports are removed at the start of each run, so a cancelled run never leaves the previous run's reports behind.
+  * **Errors and manual review:** A PDF that fails (unreadable file, no text found) gets no CSV; the technical detail goes to `_errores.csv`. Everything a person should check by hand goes to one report, `_revisar.csv` (columns `ARCHIVO`, `MOTIVO_REVISION`): unreadable PDFs, CSVs without a name or office number, doubtful ALTA/BAJA and texts that do not look like a UIF office. When the run ends the app shows only counts (processed, altas, bajas, how many need review, how many could not be read), never file names, and an **Abrir reporte de revisión** button that opens `_revisar.csv` in the default program (Excel). Both reports are removed at the start of each run, so a cancelled run never leaves the previous run's reports behind.
   * **Cache writes are atomic:** each transcription is written to a temporary file and renamed, so closing the app mid-write never leaves a truncated transcription in the cache.
 
 #### 2. Stage 2: Offline NLP Document Classifier (TF-IDF + SVM Classifier)
@@ -167,7 +141,9 @@ The backend (implemented in `ui/pipeline.py`) uses a two-stage hybrid architectu
   * **Feature Extraction:** Reconstructed text is processed by a **TF-IDF Vectorizer** (`models/tfidf_vectorizer.joblib`) to extract word and bigram patterns.
   * **Prediction:** A pre-trained **Support Vector Machine (SVM) Classifier** (`models/svm_classifier_model.joblib`) analyzes the text features.
   * **Retraining:** `python scripts/train_classifier.py files` reads every PDF with the app's own OCR (`en_PP-OCRv4`), labels it with the `MOVIMIENTO` of its reference CSV and rewrites the three models in `models/`. Since v2.3.4 the model is trained on the current OCR, which keeps words apart; the previous model had been trained on text with run-together words (1,032 such terms in its vocabulary).
-  * **Validation Benchmarks:** During test evaluations, the SVM classifier achieved **100% classification accuracy** (perfect precision and recall), ensuring absolute reliability in document status determination.
+  * **Confidence check (v2.4.0):** every prediction comes with its probability. A CSV whose ALTA/BAJA has less than `MIN_CONFIDENCE` (0.90) is listed in `_revisar.csv` as doubtful, and a text with fewer than `MIN_KNOWN_TERMS` (100) words of the model's vocabulary is listed as "not a UIF office" (the model would still answer ALTA or BAJA for an electricity bill). On the 116 project PDFs the lowest probability is 0.72 (one real doubtful case) and the rest are above 0.95; real offices contain 271 or more known terms.
+  * **No personal data in the published model:** `models/` is public, so the vocabulary keeps only terms that appear in at least `MIN_DOC_FREQ` (3) offices, never terms with digits (RFC, office numbers, dates) and never words of the names of the people or companies used for training (`safe_vocabulary` in `ui/pipeline.py`, `name_words` in `scripts/train_classifier.py`). With that vocabulary (816 terms) the 5-fold cross-validation stays at 100 %.
+  * **Measured results (v2.3.5, 14 Nov 2026):** with the 116 project PDFs, compared against the reference CSVs that could be paired (95): MOVIMIENTO 95/95, office number 95/95, full row 93/95, names with Ñ 7/7. The cross-validation table below was measured on 115 documents from a single issuer, so it does not guarantee the same accuracy on new formats; always review the BAJA results.
 
 ##### NLP Classification Model Benchmarks & Strategies
 
@@ -205,11 +181,11 @@ To select the most robust classification strategy for identifying register addit
   * **Heuristic Matching:** Regex patterns identify entry numbers, movement dates, and official reference numbers.
   * **Name repair (`ui/name_normalization.py`):** Accents are removed from vowels and `Ñ` is kept, matching the reference CSVs (`JOSE MARIA`, `SALDAÑA`). Tokens the OCR damaged are repaired only when the result is a known name in `models/gazetteer.joblib` (`RAMFREZ → RAMIREZ`, `ZEPEDAE → ZEPEDA`), and for people `Ñ` is restored when the `Ñ` spelling is a known name (`SALDANA → SALDAÑA`, `PENA → PEÑA`).
   * **Table headers:** In the 110/K offices the name comes after a `Persona / RFC` table header; those header lines are skipped. Spelled-out legal forms are shortened (`SOCIEDAD ANONIMA DE CAPITAL VARIABLE → SA DE CV`).
-  * **Segmentation (`ui/ner_segmenter.py`):** The CRF tagger splits people into NOMBRE / PATERNO / MATERNO and detects companies. The CRF tags almost any unknown 2-3 word name as a company, so a name is only treated as a company when it also contains a company word (`SA`, `SC`, `GRUPO`, `ASOCIACION`...); otherwise it is split by position (`PERSONA SINTETICA → SINTETICO / SINTETICO`). Extracted names are **not** matched against other CSV files on disk.
+  * **Segmentation (`ui/ner_segmenter.py`):** The CRF tagger splits people into NOMBRE / PATERNO / MATERNO and detects companies. The CRF tags almost any unknown 2-3 word name as a company, so a name is only treated as a company when it also contains a company word (`SA`, `SC`, `GRUPO`, `ASOCIACION`...); otherwise it is split by position (`XIULAN MEI → XIULAN / MEI`). Extracted names are **not** matched against other CSV files on disk.
   * **CSV output:** One CSV per PDF, encoded in Windows-1252 (same as the reference CSVs) so Excel shows `Ñ` correctly.
 
 ---
 
 ## 🔒 Security & Offline Design
 1. **Model Cache:** All models (OCR ONNX engines, TF-IDF vectorizer, and SVM classifier weights) are bundled locally in the `/models` directory or cached on first launch.
-2. **Zero Outbound Traffic:** No telemetry, tracking, or network requests are executed at runtime. The application is completely air-gapped and secure.
+2. **Zero Outbound Traffic:** No telemetry, tracking, or network requests are executed at runtime. The application itself never opens a network connection (the packaged Flet runtime includes networking libraries, but the app does not use them).

@@ -15,12 +15,12 @@ from ui.pipeline import train_classifier
 HEADER = "MOVIMIENTO,NOMBRE,PATERNO,MATERNO,MOTIVO,CIUDAD,PAIS\n"
 
 ALTA_TEXT = (
-    "Oficio 110/G/0000/2026. Las entidades financieras a que se refiere el articulo 115 de la "
+    "Oficio 110/G/1000/2026. Las entidades financieras a que se refiere el articulo 115 de la "
     "Ley de Instituciones de Credito y la Ley General de Organizaciones y Actividades Auxiliares "
     "del Credito, en las listas de personas bloqueadas mediante oficio emitido"
 )
 BAJA_TEXT = (
-    "Oficio 110/K/0000/2026. En cumplimiento a la suspension definitiva dictada en el juicio de "
+    "Oficio 110/K/2001/2026. En cumplimiento a la suspension definitiva dictada en el juicio de "
     "amparo, con fundamento en el mismo ordenamiento, se resuelve: Primero. Se elimina a dicha "
     "persona de la Lista. Segundo. Para los efectos en los terminos"
 )
@@ -28,13 +28,13 @@ BAJA_TEXT = (
 
 def test_clean_name():
     assert clean_name("10_Simetría_Jurídica_cnbv.pdf") == "simetriajuridica"
-    assert clean_name("PERSONA SINTETICA.csv") == "oficio_sintetico"
-    assert clean_name("2_oficio_sintetico.pdf") == "oficio_sintetico"
+    assert clean_name("xiulan_mei.csv") == "xiulanmei"
+    assert clean_name("2_ana_sof_a_n_ez_ib_ez.pdf") == "anasofanezibez"
 
 
 def test_office_number():
-    assert office_number("OFICIO NO. 110/K/0000/2026") == "110_oficio_sintetico"
-    assert office_number("110_oficio_sintetico_vs.pdf") == "110_oficio_sintetico"
+    assert office_number("OFICIO NO. 110/K/2002/2026") == "110_k_2002_2026"
+    assert office_number("110_k_2003_2026_vs.pdf") == "110_k_2003_2026"
     assert office_number("sin oficio") is None
     assert office_number(None) is None
 
@@ -45,9 +45,9 @@ def labeled_folder(tmp_path):
     d2 = tmp_path / "lpb_oficios_05_06_26"
     d1.mkdir()
     d2.mkdir()
-    (d1 / "PERSONA SINTETICA.csv").write_text(HEADER + "ALTA,SINTETICO,SINTETICO,,OFICIO NO. 110/G/0000/2026,,\n", encoding="utf-8")
-    (d2 / "PERSONA SINTETICA.csv").write_bytes(
-        (HEADER + "BAJA,DIANA VANESSA,MADRID,LUPIÁN,,OFICIO NO. 110/K/0000/2026,\n").encode("cp1252"))
+    (d1 / "xiulan_mei.csv").write_text(HEADER + "ALTA,XIULAN,MEI,,OFICIO NO. 110/G/1000/2026,,\n", encoding="utf-8")
+    (d2 / "laura_ines_campos_lujan.csv").write_bytes(
+        (HEADER + "BAJA,LAURA INES,CAMPOS,LUJÁN,,OFICIO NO. 110/K/2002/2026,\n").encode("cp1252"))
     (d2 / "raro.csv").write_text(HEADER + "OTRO,X,Y,,OFICIO NO. 110/K/1/2026,,\n", encoding="utf-8")
     return tmp_path
 
@@ -55,17 +55,17 @@ def labeled_folder(tmp_path):
 def test_load_csv_labels_reads_utf8_and_cp1252(labeled_folder):
     records, by_office = load_csv_labels(labeled_folder)
     assert {r["movement"] for r in records} == {"ALTA", "BAJA", "OTRO"}
-    assert by_office["110_oficio_sintetico"]["csv"] == "PERSONA SINTETICA.csv"
+    assert by_office["110_k_2002_2026"]["csv"] == "laura_ines_campos_lujan.csv"
 
 
 def test_label_for_by_name_then_by_office(labeled_folder):
     records, by_office = load_csv_labels(labeled_folder)
     # por nombre, solo dentro de la misma subcarpeta
-    assert label_for("11_PERSONA SINTETICA.pdf", "lpb_oficios_01_06_26", "", records, by_office) == "ALTA"
-    assert label_for("11_PERSONA SINTETICA.pdf", "lpb_oficios_05_06_26", "", records, by_office) is None
+    assert label_for("11_xiulan_mei.pdf", "lpb_oficios_01_06_26", "", records, by_office) == "ALTA"
+    assert label_for("11_xiulan_mei.pdf", "lpb_oficios_05_06_26", "", records, by_office) is None
     # por oficio: del nombre del archivo o del texto
-    assert label_for("110_oficio_sintetico_vs.pdf", "x", "", records, by_office) == "BAJA"
-    assert label_for("mx_m5071.pdf", "x", "Oficio 110/K/0000/2026", records, by_office) == "BAJA"
+    assert label_for("110_k_2002_2026_vs.pdf", "x", "", records, by_office) == "BAJA"
+    assert label_for("mx_m5071.pdf", "x", "Oficio 110/K/2002/2026", records, by_office) == "BAJA"
     # etiquetas que no son ALTA/BAJA no se usan
     assert label_for("110_k_1_2026.pdf", "x", "", records, by_office) is None
 
@@ -73,13 +73,13 @@ def test_label_for_by_name_then_by_office(labeled_folder):
 def test_build_dataset_skips_unlabeled_and_errors(labeled_folder):
     d1 = labeled_folder / "lpb_oficios_01_06_26"
     results = [
-        OcrResult("11_PERSONA SINTETICA.pdf", d1 / "11_PERSONA SINTETICA.pdf", ALTA_TEXT),
+        OcrResult("11_xiulan_mei.pdf", d1 / "11_xiulan_mei.pdf", ALTA_TEXT),
         OcrResult("sin_csv.pdf", d1 / "sin_csv.pdf", "Oficio 110/G/9999/2026"),
-        OcrResult("110_oficio_sintetico_vs.pdf", d1 / "110_oficio_sintetico_vs.pdf", error="ilegible"),
+        OcrResult("110_k_2002_2026_vs.pdf", d1 / "110_k_2002_2026_vs.pdf", error="ilegible"),
     ]
     texts, labels, skipped = build_dataset(results, labeled_folder)
     assert labels == ["ALTA"] and texts == [ALTA_TEXT]
-    assert skipped == ["sin_csv.pdf", "110_oficio_sintetico_vs.pdf"]
+    assert skipped == ["sin_csv.pdf", "110_k_2002_2026_vs.pdf"]
 
 
 def test_train_classifier_separates_classes():
@@ -119,3 +119,68 @@ def test_shipped_vocabulary_has_no_merged_words(shipped):
 def test_shipped_svm_classifies_typical_texts(shipped):
     vec, svm, _ = shipped
     assert list(svm.predict(vec.transform([ALTA_TEXT, BAJA_TEXT]))) == ["ALTA", "BAJA"]
+
+
+def test_published_models_match_installed_sklearn():
+    """Los modelos se cargan sin aviso de versión: requirements.txt fija la misma
+    versión de scikit-learn con la que se guardaron."""
+    import warnings
+
+    import joblib
+    from sklearn.exceptions import InconsistentVersionWarning
+
+    from ui.paths import models_dir
+
+    paths = [models_dir() / n for n in ("tfidf_vectorizer.joblib", "svm_classifier_model.joblib")]
+    if not all(p.exists() for p in paths):
+        pytest.skip("modelos no disponibles")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", InconsistentVersionWarning)
+        for p in paths:
+            joblib.load(p)
+
+
+def test_requirements_pin_every_dependency():
+    from pathlib import Path
+
+    req = Path(__file__).resolve().parent.parent / "requirements.txt"
+    lines = [ln.strip() for ln in req.read_text(encoding="utf-8").splitlines()
+             if ln.strip() and not ln.startswith("#")]
+    assert lines and all("==" in ln for ln in lines), [ln for ln in lines if "==" not in ln]
+
+
+# ---------------------------------------------------------------------------
+# El modelo publicado no guarda datos personales
+# ---------------------------------------------------------------------------
+
+def test_safe_vocabulary_drops_names_and_numbers():
+    from ui.pipeline import safe_vocabulary
+
+    vocab = ["se elimina", "marta ibanez", "ibanez", "zawe000101ab1", "110", "lista de", "de"]
+    assert safe_vocabulary(vocab, {"marta", "ibanez"}) == ["de", "lista de", "se elimina"]
+
+
+def test_train_classifier_excludes_given_words():
+    texts = [ALTA_TEXT + " MARTA IBANEZ" + f" caso{i}" for i in range(6)] + \
+            [BAJA_TEXT + " MARTA IBANEZ" + f" caso{i}" for i in range(6)]
+    labels = ["ALTA"] * 6 + ["BAJA"] * 6
+    vec, _ = train_classifier(texts, labels, exclude_words={"marta", "ibanez"})
+    assert not any(w in ("marta", "ibanez") for t in vec.vocabulary_ for w in t.split())
+    assert not any(c.isdigit() for t in vec.vocabulary_ for c in t)
+    assert not hasattr(vec, "stop_words_")  # sklearn guarda ahí los términos descartados
+
+
+def test_name_words_reads_reference_csvs(tmp_path):
+    from scripts.train_classifier import name_words
+
+    (tmp_path / "a.csv").write_text(HEADER + "ALTA,MARÍA JOSÉ,DE LA ROSA,NÚÑEZ,OFICIO NO. 1,,\n", encoding="utf-8")
+    words = name_words(["medida preventiva impuesta a GRUPO ALTAVISTA, S.A. DE C.V., con R.F.C. GAL"], tmp_path)
+    assert {"maria", "jose", "rosa", "nunez", "grupo", "altavista"} <= words
+    assert not words & {"de", "la", "sa", "cv"}
+
+
+def test_published_vocabulary_has_no_numbers_or_rare_terms(shipped):
+    vectorizer = shipped[0]
+    assert not hasattr(vectorizer, "stop_words_")
+    assert not any(c.isdigit() for term in vectorizer.vocabulary_ for c in term)
+    assert len(vectorizer.vocabulary_) < 2000  # solo términos frecuentes

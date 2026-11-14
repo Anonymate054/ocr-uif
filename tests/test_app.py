@@ -55,17 +55,48 @@ def test_done_status_ok():
 
 
 def test_done_status_with_errors():
-    result = PipelineResult(["a.csv"], errors=[("roto.pdf", "x")], summary={"ALTA": 1})
+    result = PipelineResult(["a.csv"], errors=[("x.pdf", "ilegible")], summary={"ALTA": 1})
     icon, title, detail = app.done_status(result)
-    assert (icon, title) == ("error", "Proceso completado con errores")
-    assert detail.endswith("1 archivo(s) sin procesar · ver _errores.csv")
+    assert (icon, title) == ("warn", "Proceso completado · revisa el reporte")
+    assert detail == "1 clasificado · 1 alta · 0 bajas\n1 PDF(s) no se pudieron leer"
 
 
 def test_done_status_with_rows_to_review():
-    result = PipelineResult(["a.csv"], summary={"BAJA": 1}, review=[("a.csv", "sin nombre")])
+    result = PipelineResult(["a.csv", "b.csv"], summary={"BAJA": 2},
+                            review=[("a.csv", "BAJA dudoso (60% de confianza)"), ("b.csv", "sin nombre")])
     icon, title, detail = app.done_status(result)
-    assert icon == "error" and "revisa" in title
-    assert detail.endswith("ver _revisar.csv")
+    assert icon == "warn"
+    assert detail.splitlines() == [
+        "2 clasificados · 0 altas · 2 bajas",
+        "2 para revisión manual (confianza baja o datos incompletos)",
+    ]
+
+
+def test_done_status_does_not_list_file_names():
+    """En pantalla solo van cuentas; los nombres están en el reporte."""
+    result = PipelineResult(["secreto.csv"], errors=[("otro.pdf", "x")], summary={"ALTA": 1},
+                            review=[("secreto.csv", "sin nombre")])
+    _, title, detail = app.done_status(result)
+    assert "secreto" not in title + detail and "otro" not in title + detail
+
+
+@pytest.mark.parametrize("platform, expected", [("linux", "xdg-open"), ("darwin", "open")])
+def test_open_file_uses_system_viewer(monkeypatch, tmp_path, platform, expected):
+    import subprocess
+
+    calls = []
+    monkeypatch.setattr(app.sys, "platform", platform)
+    monkeypatch.setattr(subprocess, "Popen", lambda args: calls.append(args))
+    app.open_file(tmp_path / "_revisar.csv")
+    assert calls == [[expected, str(tmp_path / "_revisar.csv")]]
+
+
+def test_open_file_on_windows(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(app.sys, "platform", "win32")
+    monkeypatch.setattr(app.os, "startfile", lambda p: calls.append(p), raising=False)
+    app.open_file(tmp_path / "_revisar.csv")
+    assert calls == [str(tmp_path / "_revisar.csv")]
 
 
 def test_failure_status_detects_cancel_by_type():

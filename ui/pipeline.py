@@ -14,9 +14,10 @@ Todas las fases reciben progress_cb(pct: float, message: str) para la UI.
 from __future__ import annotations
 
 import csv
+import re
 import threading
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 import ui.cpu_limits  # noqa: F401  (antes de numpy/onnxruntime)
 import joblib
@@ -26,7 +27,7 @@ from ui.paths import models_dir, project_root
 
 __all__ = [
     "Cancelled", "OcrResult", "PipelineResult", "run_ocr", "run_nlp_and_predict", "train_classifier",
-    "build_record", "run_output", "run_full_pipeline", "format_summary",
+    "build_record", "classify", "run_output", "run_full_pipeline", "format_summary",
 ]
 
 ProgressCallback = Callable[[float, str], None]
@@ -42,6 +43,15 @@ REVIEW_REPORT = "_revisar.csv"
 
 MOVEMENTS = ("ALTA", "BAJA")
 
+# Por debajo de esta probabilidad, el ALTA/BAJA se marca para revisión manual.
+# Con los 116 oficios de prueba la mínima es 0.72 (un caso dudoso real) y el
+# resto queda arriba de 0.95.
+MIN_CONFIDENCE = 0.90
+# Términos del vocabulario TF-IDF que debe tener un oficio. Los 116 de prueba
+# tienen 271 o más; un texto que no es oficio (una factura) tiene 1 o 2, y aun
+# así el modelo le daría ALTA o BAJA con mucha confianza.
+MIN_KNOWN_TERMS = 100
+
 
 class PipelineResult(list):
     """Lista de CSV escritos, con los archivos que fallaron en `.errors`, los
@@ -52,8 +62,16 @@ class PipelineResult(list):
         super().__init__(written)
         self.errors: List[Tuple[str, str]] = errors or []
         self.review: List[Tuple[str, str]] = review or []
+        # Reporte para la persona que usa la app (_revisar.csv), si se escribió
+        self.report: Optional[Path] = None
         self.summary: Dict[str, int] = {m: 0 for m in MOVEMENTS}
         self.summary.update(summary or {})
+
+    @property
+    def needs_review(self) -> int:
+        """Archivos que alguien debe revisar a mano: CSV dudosos o incompletos
+        y PDFs que no se pudieron leer."""
+        return len(self.review) + len(self.errors)
 
 
 def format_summary(result: PipelineResult) -> str:
@@ -66,8 +84,6 @@ def format_summary(result: PipelineResult) -> str:
         parts.append(f"{n} {movement.lower()}{'' if n == 1 else 's'}")
     # Etiquetas que no son ALTA/BAJA (un modelo reentrenado), por si acaso
     parts += [f"{n} {m.lower()}" for m, n in s.items() if m not in MOVEMENTS and n]
-    if result.review:
-        parts.append(f"{len(result.review)} por revisar")
     return " · ".join(parts)
 
 
@@ -80,14 +96,38 @@ def _check_cancel(cancel_event: Optional[threading.Event]) -> None:
 # FASE 2 — Clasificador TF-IDF + SVM (ALTA / BAJA)
 # ---------------------------------------------------------------------------
 
-def train_classifier(texts, labels) -> Tuple[object, object]:
+# Un término del vocabulario debe aparecer en al menos este número de oficios
+# (como máximo el 20 % del lote). Los nombres de personas y empresas aparecen en
+# uno o dos oficios, así que no entran al modelo publicado.
+MIN_DOC_FREQ = 3
+_HAS_DIGIT_RE = re.compile(r"\d")
+
+
+def safe_vocabulary(vocabulary: Iterable[str], exclude_words: Iterable[str] = ()) -> List[str]:
+    """Vocabulario sin datos sensibles: fuera los términos con dígitos (RFC,
+    números de oficio, fechas) y los que contienen una palabra de *exclude_words*
+    (los nombres de las personas y empresas del entrenamiento)."""
+    exclude = {w.lower() for w in exclude_words}
+    return sorted(
+        term for term in vocabulary
+        if not _HAS_DIGIT_RE.search(term) and not any(w in exclude for w in term.split())
+    )
+
+
+def train_classifier(texts, labels, exclude_words: Iterable[str] = ()) -> Tuple[object, object]:
     """TF-IDF (palabras y pares de palabras) + SVM lineal calibrada, la
-    configuración del modelo publicado en models/. Devuelve (vectorizer, classifier)."""
+    configuración del modelo publicado en models/. Devuelve (vectorizer, classifier).
+
+    El vocabulario solo guarda términos frecuentes y sin datos sensibles (ver
+    safe_vocabulary), porque models/ se publica en el repositorio."""
     from sklearn.calibration import CalibratedClassifierCV
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.svm import SVC
 
-    vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+    min_df = max(1, min(MIN_DOC_FREQ, len(texts) // 5))
+    probe = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=min_df).fit(texts)
+    vocabulary = safe_vocabulary(probe.vocabulary_, exclude_words)
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2), vocabulary=vocabulary)
     base_clf = SVC(kernel="linear", class_weight="balanced", random_state=42)
     clf = CalibratedClassifierCV(base_clf, ensemble=False)
     clf.fit(vectorizer.fit_transform(texts), labels)
@@ -155,13 +195,39 @@ def build_record(text: str, movement: str, gazetteer: dict) -> Dict[str, str]:
     }
 
 
-def review_reasons(row: Dict[str, str]) -> List[str]:
+class Prediction(NamedTuple):
+    movement: str
+    confidence: Optional[float]  # None si el modelo no da probabilidades
+    known_terms: Optional[int]   # None si el vectorizador no es TF-IDF
+
+
+def classify(texts: List[str], vectorizer, clf) -> List[Prediction]:
+    """ALTA/BAJA de cada texto, con su probabilidad y cuántos términos del
+    vocabulario contiene. Una sola llamada al modelo para todo el lote."""
+    if not texts:
+        return []
+    features = vectorizer.transform(texts)
+    indptr = getattr(features, "indptr", None)
+    known = [int(indptr[i + 1] - indptr[i]) for i in range(len(texts))] if indptr is not None else [None] * len(texts)
+    if hasattr(clf, "predict_proba") and hasattr(clf, "classes_"):
+        probs = clf.predict_proba(features)
+        best = probs.argmax(axis=1)
+        return [Prediction(str(clf.classes_[b]), float(p[b]), k) for b, p, k in zip(best, probs, known, strict=True)]
+    return [Prediction(str(m), None, k) for m, k in zip(clf.predict(features), known, strict=True)]
+
+
+def review_reasons(row: Dict[str, str], prediction: Optional[Prediction] = None) -> List[str]:
     """Por qué una fila ya escrita necesita revisión manual (lista vacía si no)."""
     reasons = []
     if not row.get("NOMBRE", "").strip():
         reasons.append("sin nombre")
     if row.get("MOTIVO", "").strip() in ("", "N/A"):
         reasons.append("sin número de oficio")
+    if prediction is not None:
+        if prediction.known_terms is not None and prediction.known_terms < MIN_KNOWN_TERMS:
+            reasons.append("no parece un oficio de la UIF")
+        elif prediction.confidence is not None and prediction.confidence < MIN_CONFIDENCE:
+            reasons.append(f"{prediction.movement} dudoso ({prediction.confidence:.0%} de confianza)")
     return reasons
 
 
@@ -200,9 +266,15 @@ def write_error_report(out_dir: Path, errors: List[Tuple[str, str]]) -> Optional
     return _write_report(out_dir / ERROR_REPORT, ["ARCHIVO", "ERROR"], errors)
 
 
-def write_review_report(out_dir: Path, review: List[Tuple[str, str]]) -> Optional[Path]:
-    """Escribe _revisar.csv con los CSV incompletos; si no hay, borra el anterior."""
-    return _write_report(out_dir / REVIEW_REPORT, ["ARCHIVO", "MOTIVO_REVISION"], review)
+READ_ERROR_REASON = "no se pudo leer el PDF (detalle en _errores.csv)"
+
+
+def write_review_report(out_dir: Path, review: List[Tuple[str, str]],
+                        errors: List[Tuple[str, str]] = ()) -> Optional[Path]:
+    """Escribe _revisar.csv, el reporte para quien usa la app: los CSV dudosos o
+    incompletos y los PDFs que no se pudieron leer. Si no hay nada, borra el anterior."""
+    rows = list(review) + [(name, READ_ERROR_REASON) for name, _ in errors]
+    return _write_report(out_dir / REVIEW_REPORT, ["ARCHIVO", "MOTIVO_REVISION"], rows)
 
 
 def run_output(
@@ -233,22 +305,22 @@ def run_output(
     errors: List[Tuple[str, str]] = [(r.filename, r.error) for r in ocr_results if r.error]
 
     # Una sola llamada al clasificador para todo el lote
-    movements = clf.predict(vectorizer.transform([r.text for r in ok])) if ok else []
+    predictions = classify([r.text for r in ok], vectorizer, clf)
 
     written: List[str] = []
     summary: Dict[str, int] = {}
     review: List[Tuple[str, str]] = []
     used_names: set = set()
     total = len(ok)
-    for idx, (res, movement) in enumerate(zip(ok, movements, strict=True)):
+    for idx, (res, prediction) in enumerate(zip(ok, predictions, strict=True)):
         _check_cancel(cancel_event)
         progress_cb(idx / total, f"[{idx + 1}/{total}] Generating CSV for {res.filename}…")
         try:
-            row = build_record(res.text, movement, gazetteer)
+            row = build_record(res.text, prediction.movement, gazetteer)
             out_csv = out_dir / _unique_csv_name(res.filename, used_names)
             write_csv(out_csv, [row])
             written.append(str(out_csv))
-            reasons = review_reasons(row)
+            reasons = review_reasons(row, prediction)
             if reasons:
                 review.append((out_csv.name, "; ".join(reasons)))
             movement = str(row["MOVIMIENTO"])
@@ -256,14 +328,16 @@ def run_output(
         except Exception as exc:  # un oficio raro no detiene el lote
             errors.append((res.filename, str(exc) or type(exc).__name__))
 
-    write_review_report(out_dir, review)
+    report = write_review_report(out_dir, review, errors)
     if write_error_report(out_dir, errors):
         progress_cb(1.0, f"⚠ {len(written)} CSV(s) written, {len(errors)} file(s) with errors — see {ERROR_REPORT}")
     elif review:
         progress_cb(1.0, f"⚠ {len(written)} CSV(s) written, {len(review)} to review — see {REVIEW_REPORT}")
     else:
         progress_cb(1.0, f"[OK] Output complete - {len(written)} CSV(s) written to {output_folder}")
-    return PipelineResult(written, errors, summary, review)
+    result = PipelineResult(written, errors, summary, review)
+    result.report = report
+    return result
 
 
 # ---------------------------------------------------------------------------

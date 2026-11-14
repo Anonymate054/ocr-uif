@@ -73,7 +73,7 @@ def repair_token(token: str, vocab: FrozenSet[str], short_words: FrozenSet[str] 
             if cand in vocab:
                 return cand
     # Letra sobrante al final por el borde de la tabla: ZEPEDAE, CORTESS, SCE.
-    # Solo una E final o una S duplicada (SINTETICO es un nombre, no ARANDA + S).
+    # Solo una E final o una S duplicada (SALAS es un apellido, no SALA + S).
     # En tokens cortos solo si queda un sufijo societario (SCE -> SC).
     stripped = token[:-1]
     extra_letter = token[-1] == "E" or token.endswith("SS")

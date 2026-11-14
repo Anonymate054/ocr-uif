@@ -43,7 +43,7 @@ def clean_name(name: str) -> str:
 
 
 def office_number(text: str) -> Optional[str]:
-    """Número de oficio normalizado: "110/K/0000/2026" -> "110_oficio_sintetico"."""
+    """Número de oficio normalizado: "110/K/2001/2026" -> "110_k_2001_2026"."""
     m = OFFICE_RE.search(text or "")
     return re.sub(r"[/\-\s_]+", "_", m.group(0).lower()) if m else None
 
@@ -70,6 +70,39 @@ def load_csv_labels(folder: Path) -> Tuple[List[Dict[str, str]], Dict[str, Dict[
                     by_office[office] = rec
                     break
     return records, by_office
+
+
+# Palabras cortas o genéricas de los nombres que no identifican a nadie y que
+# el resto del oficio usa a cada rato ("DE LA TORRE", "SA DE CV").
+_GENERIC_NAME_WORDS = frozenset({
+    "de", "del", "la", "las", "los", "y", "san", "santa", "sa", "cv", "sc", "ac", "rl", "sas", "sapi",
+})
+
+
+def name_words(texts, folder: Path) -> set:
+    """Palabras de los nombres de personas y empresas del entrenamiento (de los
+    CSV de referencia y de lo que extrae la app de cada texto), en minúsculas y
+    sin acentos. El vocabulario del modelo publicado las excluye."""
+    from ui.extract_and_validate import extract_name
+
+    names = []
+    for path in sorted(Path(folder).rglob("*.csv")):
+        raw = path.read_bytes()
+        for enc in ("utf-8-sig", "cp1252"):
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        for row in csv.DictReader(text.splitlines()):
+            names.append(" ".join(row.get(k) or "" for k in ("NOMBRE", "PATERNO", "MATERNO")))
+    names += [extract_name(t) for t in texts]
+    words = set()
+    for name in names:
+        folded = unicodedata.normalize("NFKD", name.lower())
+        folded = "".join(c for c in folded if not unicodedata.combining(c))
+        words.update(w for w in re.findall(r"[a-zñ]+", folded) if len(w) > 1)
+    return words - _GENERIC_NAME_WORDS
 
 
 def label_for(pdf_name: str, pdf_dir: str, text: str, records, by_office) -> Optional[str]:
@@ -117,7 +150,7 @@ def train_logistic(texts, labels, vectorizer):
     return lr
 
 
-def cross_validate(texts, labels) -> Dict[str, float]:
+def cross_validate(texts, labels, exclude_words=()) -> Dict[str, float]:
     """Exactitud y F1 macro de la SVM con validación cruzada estratificada 5x3."""
     import numpy as np
     from sklearn.metrics import accuracy_score, f1_score
@@ -128,7 +161,7 @@ def cross_validate(texts, labels) -> Dict[str, float]:
     X, y = np.array(texts, dtype=object), np.array(labels)
     accs, f1s = [], []
     for tr, te in RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=42).split(X, y):
-        vec, clf = train_classifier(X[tr], y[tr])
+        vec, clf = train_classifier(X[tr], y[tr], exclude_words)
         pred = clf.predict(vec.transform(X[te]))
         accs.append(accuracy_score(y[te], pred))
         f1s.append(f1_score(y[te], pred, average="macro"))
@@ -158,10 +191,12 @@ def main(argv=None) -> int:
         print("Se necesitan al menos 5 PDFs de cada movimiento para entrenar.")
         return 1
 
-    cv = cross_validate(texts, labels)
+    exclude = name_words(texts, args.folder)
+    cv = cross_validate(texts, labels, exclude)
     print(f"Validación cruzada SVM: exactitud {cv['accuracy']:.2%}, F1 macro {cv['f1_macro']:.3f}")
 
-    vectorizer, svm = train_classifier(texts, labels)
+    vectorizer, svm = train_classifier(texts, labels, exclude)
+    print(f"Vocabulario: {len(vectorizer.vocabulary_)} términos (sin nombres ni números)")
     lr = train_logistic(texts, labels, vectorizer)
     if args.dry_run:
         print("--dry-run: no se guardaron los modelos.")

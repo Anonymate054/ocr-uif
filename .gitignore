@@ -48,3 +48,6 @@ old/
 *.csv
 *.json
 .ipynb_checkpoints/
+
+# Generado por flet pack / PyInstaller (scripts/build_exe.py)
+*.spec
