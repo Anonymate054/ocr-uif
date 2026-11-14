@@ -36,18 +36,22 @@ ProgressCallback = Callable[[float, str], None]
 OUTPUT_ENCODING = "cp1252"
 FIELDNAMES = ["MOVIMIENTO", "NOMBRE", "PATERNO", "MATERNO", "MOTIVO", "CIUDAD", "PAIS"]
 ERROR_REPORT = "_errores.csv"
+# CSV escritos que conviene revisar a mano (sin nombre o sin número de oficio)
+REVIEW_REPORT = "_revisar.csv"
 
 
 MOVEMENTS = ("ALTA", "BAJA")
 
 
 class PipelineResult(list):
-    """Lista de CSV escritos, con los archivos que fallaron en `.errors` y
-    cuántos CSV salieron de cada movimiento en `.summary` ({"ALTA": n, "BAJA": m})."""
+    """Lista de CSV escritos, con los archivos que fallaron en `.errors`, los
+    CSV que hay que revisar a mano en `.review` y cuántos CSV salieron de cada
+    movimiento en `.summary` ({"ALTA": n, "BAJA": m})."""
 
-    def __init__(self, written=(), errors=None, summary=None):
+    def __init__(self, written=(), errors=None, summary=None, review=None):
         super().__init__(written)
         self.errors: List[Tuple[str, str]] = errors or []
+        self.review: List[Tuple[str, str]] = review or []
         self.summary: Dict[str, int] = {m: 0 for m in MOVEMENTS}
         self.summary.update(summary or {})
 
@@ -62,6 +66,8 @@ def format_summary(result: PipelineResult) -> str:
         parts.append(f"{n} {movement.lower()}{'' if n == 1 else 's'}")
     # Etiquetas que no son ALTA/BAJA (un modelo reentrenado), por si acaso
     parts += [f"{n} {m.lower()}" for m, n in s.items() if m not in MOVEMENTS and n]
+    if result.review:
+        parts.append(f"{len(result.review)} por revisar")
     return " · ".join(parts)
 
 
@@ -149,6 +155,16 @@ def build_record(text: str, movement: str, gazetteer: dict) -> Dict[str, str]:
     }
 
 
+def review_reasons(row: Dict[str, str]) -> List[str]:
+    """Por qué una fila ya escrita necesita revisión manual (lista vacía si no)."""
+    reasons = []
+    if not row.get("NOMBRE", "").strip():
+        reasons.append("sin nombre")
+    if row.get("MOTIVO", "").strip() in ("", "N/A"):
+        reasons.append("sin número de oficio")
+    return reasons
+
+
 def _unique_csv_name(filename: str, used: set) -> str:
     """Nombre de salida único: dos PDFs homónimos en subcarpetas distintas no
     deben sobrescribir el CSV del otro."""
@@ -167,17 +183,26 @@ def write_csv(path: Path, rows: Iterable[Dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
-def write_error_report(out_dir: Path, errors: List[Tuple[str, str]]) -> Optional[Path]:
-    """Escribe _errores.csv si hubo fallos; si no, borra el de una corrida anterior."""
-    report = out_dir / ERROR_REPORT
-    if not errors:
+def _write_report(report: Path, header: List[str], rows: List[Tuple[str, str]]) -> Optional[Path]:
+    """Escribe el reporte si hay filas; si no, borra el de una corrida anterior."""
+    if not rows:
         report.unlink(missing_ok=True)
         return None
     with open(report, "w", newline="", encoding=OUTPUT_ENCODING, errors="replace") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["ARCHIVO", "ERROR"])
-        writer.writerows(errors)
+        writer.writerow(header)
+        writer.writerows(rows)
     return report
+
+
+def write_error_report(out_dir: Path, errors: List[Tuple[str, str]]) -> Optional[Path]:
+    """Escribe _errores.csv si hubo fallos; si no, borra el de una corrida anterior."""
+    return _write_report(out_dir / ERROR_REPORT, ["ARCHIVO", "ERROR"], errors)
+
+
+def write_review_report(out_dir: Path, review: List[Tuple[str, str]]) -> Optional[Path]:
+    """Escribe _revisar.csv con los CSV incompletos; si no hay, borra el anterior."""
+    return _write_report(out_dir / REVIEW_REPORT, ["ARCHIVO", "MOTIVO_REVISION"], review)
 
 
 def run_output(
@@ -191,13 +216,18 @@ def run_output(
 ) -> PipelineResult:
     """
     Escribe un CSV por PDF leído. Los PDFs cuyo OCR falló no generan CSV y se
-    listan en _errores.csv. Devuelve las rutas escritas, con los fallos en `.errors`.
+    listan en _errores.csv; los CSV sin nombre o sin número de oficio se listan
+    en _revisar.csv. Devuelve las rutas escritas, con los fallos en `.errors` y
+    los pendientes de revisión en `.review`.
     """
     from ui.ner_segmenter import get_gazetteer
 
     gazetteer = get_gazetteer()
     out_dir = Path(output_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Los reportes de una corrida anterior no deben sobrevivir a una cancelación
+    for stale in (ERROR_REPORT, REVIEW_REPORT):
+        (out_dir / stale).unlink(missing_ok=True)
 
     ok = [r for r in ocr_results if not r.error]
     errors: List[Tuple[str, str]] = [(r.filename, r.error) for r in ocr_results if r.error]
@@ -207,9 +237,10 @@ def run_output(
 
     written: List[str] = []
     summary: Dict[str, int] = {}
+    review: List[Tuple[str, str]] = []
     used_names: set = set()
     total = len(ok)
-    for idx, (res, movement) in enumerate(zip(ok, movements)):
+    for idx, (res, movement) in enumerate(zip(ok, movements, strict=True)):
         _check_cancel(cancel_event)
         progress_cb(idx / total, f"[{idx + 1}/{total}] Generating CSV for {res.filename}…")
         try:
@@ -217,16 +248,22 @@ def run_output(
             out_csv = out_dir / _unique_csv_name(res.filename, used_names)
             write_csv(out_csv, [row])
             written.append(str(out_csv))
+            reasons = review_reasons(row)
+            if reasons:
+                review.append((out_csv.name, "; ".join(reasons)))
             movement = str(row["MOVIMIENTO"])
             summary[movement] = summary.get(movement, 0) + 1
         except Exception as exc:  # un oficio raro no detiene el lote
             errors.append((res.filename, str(exc) or type(exc).__name__))
 
+    write_review_report(out_dir, review)
     if write_error_report(out_dir, errors):
         progress_cb(1.0, f"⚠ {len(written)} CSV(s) written, {len(errors)} file(s) with errors — see {ERROR_REPORT}")
+    elif review:
+        progress_cb(1.0, f"⚠ {len(written)} CSV(s) written, {len(review)} to review — see {REVIEW_REPORT}")
     else:
         progress_cb(1.0, f"[OK] Output complete - {len(written)} CSV(s) written to {output_folder}")
-    return PipelineResult(written, errors, summary)
+    return PipelineResult(written, errors, summary, review)
 
 
 # ---------------------------------------------------------------------------

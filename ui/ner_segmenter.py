@@ -194,7 +194,7 @@ def segment_entity_name(fullname: str) -> Tuple[bool, str, str, str]:
     if n_company or not all(t in _PERSON_TAGS for t in tags):
         return (False, *_positional_split(tokens))
 
-    by_tag = {t: [tok for tok, tag in zip(tokens, tags) if tag == t] for t in _PERSON_TAGS}
+    by_tag = {t: [tok for tok, tag in zip(tokens, tags, strict=True) if tag == t] for t in _PERSON_TAGS}
     nombre = " ".join(by_tag["FIRST_NAME"] + by_tag["SECOND_NAME"])
     paterno = " ".join(by_tag["PAT_SURNAME"])
     materno = " ".join(by_tag["MAT_SURNAME"])

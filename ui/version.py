@@ -11,14 +11,15 @@ Resolves the project version from:
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Tuple
 
-DEFAULT_VERSION = "2.2.0"
+# Respaldo si no hay archivo VERSION ni git. scripts/bump_version.py lo
+# mantiene igual que VERSION.
+DEFAULT_VERSION = "2.3.5"
 
 _SEMVER_REGEX = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
@@ -119,7 +120,8 @@ def parse_semver(v_str: str) -> Tuple[int, int, int]:
     m = re.match(r"^(\d+)\.(\d+)\.(\d+)", v_str)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
-    return (2, 2, 0)
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", DEFAULT_VERSION)
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
 def format_ui_version(semver_str: str) -> str:
