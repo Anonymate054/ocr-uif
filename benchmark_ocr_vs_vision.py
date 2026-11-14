@@ -24,8 +24,8 @@ import numpy as np
 import fitz  # PyMuPDF
 from PIL import Image
 
-# Ground Truth canónico de prueba (Oficio 110/G/0000/2026 - Página 1)
-SAMPLE_PDF = "files/lpb_oficios_01_06_26/8_oficio_sintetico.pdf"
+# PDF de prueba: se pasa como primer argumento (python benchmark_ocr_vs_vision.py <oficio.pdf>)
+SAMPLE_PDF = sys.argv[1] if len(sys.argv) > 1 else "files/oficio_de_prueba.pdf"
 
 def get_process_memory_mb() -> float:
     """Retorna la memoria física RSS actual del proceso en Megabytes."""

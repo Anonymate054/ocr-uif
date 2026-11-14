@@ -17,13 +17,13 @@ from typing import Iterable, Optional
 
 # ── Número de oficio ─────────────────────────────────────────────────────────
 
-# 110/K/0000/2026, 110-G-0000-2026, 110 K 0000 2026...
+# 110/K/2000/2026, 110-G-1000-2026, 110 K 2000 2026...
 _OFICIO_RE = re.compile(r"110[/\-\s_]?[GKgk][/\-\s_]?\d+[/\-\s_]?\d+")
 _OFICIO_SEP_RE = re.compile(r"[/\-\s_]+")
 
 
 def extract_office_number(text: str) -> str:
-    """Número de oficio normalizado ("OFICIO NO. 110/K/0000/2026") o "N/A"."""
+    """Número de oficio normalizado ("OFICIO NO. 110/K/2000/2026") o "N/A"."""
     m = _OFICIO_RE.search(text)
     if m:
         parts = _OFICIO_SEP_RE.split(m.group(0).upper())
@@ -89,7 +89,7 @@ def _is_valid_candidate(name_upper: str) -> bool:
 
 # ── Limpieza del nombre extraído ─────────────────────────────────────────────
 
-# Nombres compuestos que el OCR pega ("JOSERICARDO") y que sí existen juntos
+# Nombres compuestos que el OCR pega ("JOSEMANUEL") y que sí existen juntos
 _MERGE_EXEMPT = frozenset({
     "ANABEL", "MARIANA", "JOSEFINA", "SANTIAGO", "LUISA", "ANAHI",
     "ANALIA", "MARIBEL", "MARISOL", "MARICELA", "ANTONIA", "ANTONIO",
@@ -111,7 +111,7 @@ def _known_names() -> tuple:
 
 
 def _split_merged_word(word: str, firstnames, surnames) -> Iterable[str]:
-    """JOSERICARDO -> JOSE RICARDO, solo si RICARDO es un nombre conocido."""
+    """JOSEMANUEL -> JOSE MANUEL, solo si MANUEL es un nombre conocido."""
     upper = word.upper()
     if upper in firstnames or upper in surnames or upper in _MERGE_EXEMPT:
         return (word,)
@@ -137,7 +137,7 @@ def _clean_ocr_name(name: str) -> str:
 
 _NAME = r"([a-zA-ZÁÉÍÓÚÜÑáéíóúüñ\s\n\.,_-]{3,120}?)"
 _RFC = r"\s*con\s*R\.?F\.?C\.?"
-# Encabezados de tabla entre la frase y el nombre ("a:\nPersona\nRFC.\nJIANCHENG...")
+# Encabezados de tabla entre la frase y el nombre ("a:\nPersona\nRFC.\nWEIMING...")
 _HEADER_LINES = r"(?:(?:Persona|Nombre|RFC|N\.?o)\.?[ \t]*\n\s*)*"
 _ITEM_NUMBER = r"(?:\d\)\s*)?"
 _END_DEFAULT = rf"(?:,|{_RFC}|;|\s*de\s*la\s*Lista|\.|\n\n)"

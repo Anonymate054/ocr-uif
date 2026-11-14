@@ -1,0 +1,27 @@
+name: etiquetas de versión
+
+# Al fusionar en master, crea la etiqueta vX.Y.Z de cada versión de VERSION
+# que todavía no la tenga (regla del proyecto). Ver scripts/tag_versions.py.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Crear y subir etiquetas faltantes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python scripts/tag_versions.py --push

@@ -1,0 +1,4 @@
+# Herramientas para empaquetar el .exe (scripts/build_exe.py). Versiones probadas.
+pyinstaller==6.22.3
+flet-cli==1.1.2
+flet-desktop==1.1.2
