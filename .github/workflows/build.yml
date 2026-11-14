@@ -1,0 +1,36 @@
+name: build exe
+
+# Empaqueta OCR-UIF.exe en Windows con scripts/build_exe.py y lo publica como
+# artefacto de la corrida (pestaña Actions > build exe > Artifacts).
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+      - name: Empaquetar
+        run: python scripts/build_exe.py
+      - name: Comprobar el ejecutable
+        shell: pwsh
+        run: |
+          $exe = Get-Item dist/OCR-UIF.exe
+          "Tamaño: {0:N0} MB" -f ($exe.Length / 1MB)
+          if ($exe.Length -lt 50MB) { throw "OCR-UIF.exe es demasiado chico; falta algo en el paquete" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OCR-UIF-${{ github.sha }}
+          path: dist/OCR-UIF.exe
+          retention-days: 30

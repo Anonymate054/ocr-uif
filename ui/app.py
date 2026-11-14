@@ -81,7 +81,7 @@ import flet as ft
 from ui.version import APP_VERSION  # noqa: E402
 from ui.cpu_limits import AVAILABLE_CORES, DEFAULT_CORES  # noqa: E402
 from ui.pipeline import (  # noqa: E402
-    ERROR_REPORT, REVIEW_REPORT, Cancelled, PipelineResult, format_summary, run_full_pipeline,
+    Cancelled, PipelineResult, format_summary, run_full_pipeline,
 )
 
 
@@ -94,21 +94,34 @@ ACCENT   = "#4C8DFA"   # primary blue
 ACCENT2  = "#7B5CF8"   # purple
 SUCCESS  = "#2ECC71"   # green check
 ERROR    = "#E5534B"   # error red
+WARN     = "#F0B429"   # amber: needs manual review
 TEXT     = "#E2E6F0"   # primary text
 MUTED    = "#4E5568"   # secondary text
 HINT     = "#353A4E"   # placeholder / hint
 
 
 def done_status(result: PipelineResult) -> tuple[str, str, str]:
-    """Estado final de un lote: (icono "ok" | "error", título, detalle)."""
-    summary = format_summary(result)
-    if result.errors:
-        return ("error", "Proceso completado con errores",
-                f"{summary}\n{len(result.errors)} archivo(s) sin procesar · ver {ERROR_REPORT}")
+    """Estado final de un lote: (icono "ok" | "warn", título, detalle).
+    El detalle dice qué se procesó y cuántos archivos hay que revisar a mano,
+    sin listar nombres: esos están en el reporte (_revisar.csv)."""
+    lines = [format_summary(result)]
     if result.review:
-        return ("error", "Proceso completado: revisa algunos archivos",
-                f"{summary}\nver {REVIEW_REPORT}")
-    return ("ok", "Proceso completado", summary)
+        lines.append(f"{len(result.review)} para revisión manual (confianza baja o datos incompletos)")
+    if result.errors:
+        lines.append(f"{len(result.errors)} PDF(s) no se pudieron leer")
+    if result.needs_review:
+        return ("warn", "Proceso completado · revisa el reporte", "\n".join(lines))
+    return ("ok", "Proceso completado", lines[0])
+
+
+def open_file(path) -> None:
+    """Abre un archivo con la aplicación predeterminada del sistema (Excel para CSV)."""
+    path = str(path)
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606  (solo en Windows)
+    else:
+        import subprocess
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
 
 
 def failure_status(exc: BaseException) -> tuple[str, str, str]:
@@ -183,7 +196,7 @@ async def main(page: ft.Page) -> None:
     page.bgcolor = BG
     page.padding = 0
     page.width  = 560
-    page.height = 540
+    page.height = 600
     page.theme = ft.Theme(
         color_scheme=ft.ColorScheme(
             primary=ACCENT,
@@ -246,6 +259,10 @@ async def main(page: ft.Page) -> None:
         ft.Icons.ERROR_ROUNDED,
         color=ERROR, size=52, visible=False,
     )
+    warn_icon = ft.Icon(
+        ft.Icons.WARNING_ROUNDED,
+        color=WARN, size=52, visible=False,
+    )
     file_lbl = ft.Text(
         "", color=TEXT, size=13, weight=ft.FontWeight.W_500,
         text_align=ft.TextAlign.CENTER,
@@ -289,6 +306,27 @@ async def main(page: ft.Page) -> None:
         ),
         height=36,
         tooltip="Detiene el proceso; los CSV ya escritos se conservan",
+        visible=False,
+    )
+
+    # ── Report button (shown when some files need manual review) ──────────────
+    report_path: list = [None]
+    btn_report = ft.OutlinedButton(
+        content=ft.Row(
+            controls=[
+                ft.Icon(ft.Icons.TABLE_VIEW_ROUNDED, color=WARN, size=16),
+                ft.Text("Abrir reporte de revisión", color=WARN, size=12,
+                        weight=ft.FontWeight.W_600),
+            ],
+            spacing=6,
+            tight=True,
+        ),
+        style=ft.ButtonStyle(
+            shape=ft.RoundedRectangleBorder(radius=10),
+            side=ft.BorderSide(1, WARN),
+        ),
+        height=36,
+        tooltip="Lista de archivos que conviene revisar a mano",
         visible=False,
     )
 
@@ -351,7 +389,7 @@ async def main(page: ft.Page) -> None:
             "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
             "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
             "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa cerca del 70 % de los núcleos para no saturar el equipo.\n\n"
-            "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas. Los PDFs que no se pudieron leer se listan en _errores.csv y los CSV sin nombre o sin número de oficio en _revisar.csv, para revisarlos a mano.\n\n"
+            "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas. Si algún archivo necesita revisión manual (confianza baja en ALTA/BAJA, datos incompletos o un PDF que no se pudo leer), verás cuántos son y el botón 'Abrir reporte de revisión', que abre la lista en Excel.\n\n"
             "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón rojo 'Cancelar proceso' que aparecerá debajo del indicador de progreso.\n\n"
             "6. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
         )
@@ -496,6 +534,9 @@ async def main(page: ft.Page) -> None:
         progress_ring.visible = True
         check_icon.visible    = False
         error_icon.visible    = False
+        warn_icon.visible     = False
+        btn_report.visible    = False
+        report_path[0]        = None
         file_lbl.value        = "Iniciando…"
         sub_lbl.value         = ""
         cancel_event.clear()
@@ -505,6 +546,7 @@ async def main(page: ft.Page) -> None:
             try:
                 result = run_full_pipeline(input_folder[0], output_folder[0], _progress_cb,
                                            cancel_event, workers=cores[0])
+                report_path[0] = result.report
                 page.run_task(_show_status, *done_status(result))
             except Exception as exc:
                 page.run_task(_show_status, *failure_status(exc))
@@ -522,10 +564,22 @@ async def main(page: ft.Page) -> None:
         _unlock()
         check_icon.visible = icon == "ok"
         error_icon.visible = icon == "error"
+        warn_icon.visible  = icon == "warn"
+        btn_report.visible = report_path[0] is not None
         file_lbl.value     = title
         sub_lbl.value      = detail
         page.update()
 
+    async def _open_report(_) -> None:
+        if report_path[0] is None:
+            return
+        try:
+            open_file(report_path[0])
+        except OSError:
+            sub_lbl.value = f"No se pudo abrir el reporte; está en {report_path[0]}"
+            page.update()
+
+    btn_report.on_click = lambda e: page.run_task(_open_report, e)
     btn_run.on_click = lambda e: page.run_task(_on_run, e)
 
     # ── Browse button factory ─────────────────────────────────────────────────
@@ -624,12 +678,13 @@ async def main(page: ft.Page) -> None:
             spacing=10,
             controls=[
                 ft.Stack(
-                    controls=[progress_ring, check_icon, error_icon],
+                    controls=[progress_ring, check_icon, error_icon, warn_icon],
                     alignment=ft.alignment.Alignment(0, 0),
                 ),
                 file_lbl,
                 sub_lbl,
                 btn_cancel,
+                btn_report,
             ],
         ),
     )

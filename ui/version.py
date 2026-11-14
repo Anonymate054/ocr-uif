@@ -19,7 +19,7 @@ from typing import Dict, Tuple
 
 # Respaldo si no hay archivo VERSION ni git. scripts/bump_version.py lo
 # mantiene igual que VERSION.
-DEFAULT_VERSION = "2.3.5"
+DEFAULT_VERSION = "2.4.0"
 
 _SEMVER_REGEX = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"

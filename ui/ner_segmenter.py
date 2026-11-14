@@ -138,7 +138,7 @@ def _tag_type(tag: str) -> str:
 
 def _positional_split(tokens: List[str]) -> Tuple[str, str, str]:
     """Orden mexicano sin modelo: nombre(s), apellido paterno, apellido materno.
-    Sirve también para nombres extranjeros que el CRF no conoce (MEIYU LEI)."""
+    Sirve también para nombres extranjeros que el CRF no conoce (XIULAN MEI)."""
     if len(tokens) == 1:
         return tokens[0], "", ""
     if len(tokens) == 2:
@@ -186,7 +186,7 @@ def segment_entity_name(fullname: str) -> Tuple[bool, str, str, str]:
     n_person = sum(tags.count(t) for t in ("FIRST_NAME", "PAT_SURNAME", "MAT_SURNAME"))
     crf_says_company = n_company > n_person
     # El CRF marca como empresa casi cualquier nombre de 2-3 palabras que no
-    # conoce (MEIYU LEI, CHEN WANXUAN). Sin una palabra societaria, eso es una
+    # conoce (XIULAN MEI, ZHOU JINGYI). Sin una palabra societaria, eso es una
     # persona con nombre extranjero.
     if crf_says_company and (has_company_word or len(tokens) > 3):
         return True, clean_str, "", ""
