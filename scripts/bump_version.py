@@ -22,6 +22,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT_DIR / "VERSION"
+VERSION_PY = ROOT_DIR / "ui" / "version.py"
 
 
 def get_current_version() -> str:
@@ -51,11 +52,20 @@ def bump(action: str, current: str) -> str:
         raise ValueError(f"Unknown action: {action}")
 
 
-def write_version(new_v: str) -> None:
-    # Ensure valid SemVer
-    parse_semver(new_v)
-    VERSION_FILE.write_text(f"{new_v}\n", encoding="utf-8")
-    print(f"Updated {VERSION_FILE.name} to {new_v}")
+_DEFAULT_RE = re.compile(r'^DEFAULT_VERSION = "[^"]*"$', re.MULTILINE)
+
+
+def write_version(new_v: str, version_file: Path = VERSION_FILE, version_py: Path = VERSION_PY) -> None:
+    """Escribe VERSION y el respaldo DEFAULT_VERSION de ui/version.py."""
+    parse_semver(new_v)  # Ensure valid SemVer
+    version_file.write_text(f"{new_v}\n", encoding="utf-8")
+    print(f"Updated {version_file.name} to {new_v}")
+    src = version_py.read_text(encoding="utf-8")
+    new_src, n = _DEFAULT_RE.subn(f'DEFAULT_VERSION = "{new_v}"', src)
+    if n != 1:
+        raise RuntimeError(f"DEFAULT_VERSION not found in {version_py}")
+    version_py.write_text(new_src, encoding="utf-8")
+    print(f"Updated ui/{version_py.name} DEFAULT_VERSION to {new_v}")
 
 
 def create_git_tag(new_v: str, message: str | None = None) -> bool:

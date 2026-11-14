@@ -156,3 +156,55 @@ def test_full_pipeline_passes_cores_to_ocr(tmp_path, monkeypatch, gaz):
     written = pipeline.run_full_pipeline("in", str(tmp_path), lambda p, m: None, workers=3)
     assert seen["workers"] == 3
     assert written.summary == {"ALTA": 0, "BAJA": 1}
+
+
+# ---------------------------------------------------------------------------
+# CSV que hay que revisar a mano (_revisar.csv)
+# ---------------------------------------------------------------------------
+
+NO_NAME_TEXT = "Oficio 110/G/1/2026\n12345\n"
+NO_OFFICE_TEXT = "Se elimina de la Lista de Personas Bloqueadas a: PERSONA SINTETICA, con RFC"
+
+
+def test_incomplete_rows_are_listed_for_review(tmp_path, gaz):
+    results = [_ok("bien.pdf", BAJA_TEXT), _ok("sin_nombre.pdf", NO_NAME_TEXT),
+               _ok("sin_oficio.pdf", NO_OFFICE_TEXT)]
+    written = pipeline.run_output(results, FakeVectorizer(), FakeClassifier(), str(tmp_path), lambda p, m: None)
+
+    assert len(written) == 3  # el CSV se escribe igual, pero se marca
+    assert written.review == [("sin_nombre.csv", "sin nombre"), ("sin_oficio.csv", "sin número de oficio")]
+    assert _read(tmp_path / pipeline.REVIEW_REPORT) == [
+        {"ARCHIVO": "sin_nombre.csv", "MOTIVO_REVISION": "sin nombre"},
+        {"ARCHIVO": "sin_oficio.csv", "MOTIVO_REVISION": "sin número de oficio"},
+    ]
+    assert pipeline.format_summary(written).endswith(" · 2 por revisar")
+
+
+@pytest.mark.parametrize("row, expected", [
+    ({"NOMBRE": "ROSALVA", "MOTIVO": "OFICIO NO. 110/K/1/2026"}, []),
+    ({"NOMBRE": " ", "MOTIVO": "N/A"}, ["sin nombre", "sin número de oficio"]),
+    ({"NOMBRE": "GRUPO SA DE CV", "MOTIVO": ""}, ["sin número de oficio"]),
+])
+def test_review_reasons(row, expected):
+    assert pipeline.review_reasons(row) == expected
+
+
+def test_complete_run_removes_stale_review_report(tmp_path, gaz):
+    (tmp_path / pipeline.REVIEW_REPORT).write_text("viejo")
+    written = pipeline.run_output([_ok("r.pdf", BAJA_TEXT)], FakeVectorizer(), FakeClassifier(),
+                                  str(tmp_path), lambda p, m: None)
+    assert written.review == []
+    assert not (tmp_path / pipeline.REVIEW_REPORT).exists()
+
+
+def test_cancel_removes_reports_from_previous_run(tmp_path):
+    """Al cancelar no debe quedar un _errores.csv o _revisar.csv de otra corrida."""
+    for name in (pipeline.ERROR_REPORT, pipeline.REVIEW_REPORT):
+        (tmp_path / name).write_text("viejo")
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(Cancelled):
+        pipeline.run_output([_ok("r.pdf", BAJA_TEXT)], FakeVectorizer(), FakeClassifier(),
+                            str(tmp_path), lambda p, m: None, cancel_event=cancel)
+    assert not (tmp_path / pipeline.ERROR_REPORT).exists()
+    assert not (tmp_path / pipeline.REVIEW_REPORT).exists()

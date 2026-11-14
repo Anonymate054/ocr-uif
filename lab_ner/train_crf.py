@@ -204,7 +204,7 @@ def evaluate_on_real_ground_truth(model_predict_fn):
                 print(f"  [Mismatch en {csv_file}]:")
                 print(f"    GT:   Nom='{gt_nom}' | Pat='{gt_pat}' | Mat='{gt_mat}'")
                 print(f"    PRED: Nom='{p_nom}' | Pat='{p_pat}' | Mat='{p_mat}' (is_comp={is_comp})")
-        except Exception as e:
+        except Exception:
             pass
             
     acc = (correct_entities / total * 100.0) if total > 0 else 0.0
