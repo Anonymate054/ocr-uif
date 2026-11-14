@@ -57,7 +57,7 @@ def _write_debug_report() -> None:
             
             # Find any .md or .joblib file
             f.write("\n--- ALL .MD AND .JOBLIB FILES IN _MEIPASS ---\n")
-            for root, dirs, files in os.walk(sys._MEIPASS):
+            for root, _dirs, files in os.walk(sys._MEIPASS):
                 for file in files:
                     if file.endswith(".md") or file.endswith(".joblib"):
                         full_p = os.path.join(root, file)
@@ -80,7 +80,9 @@ import flet as ft
 
 from ui.version import APP_VERSION  # noqa: E402
 from ui.cpu_limits import AVAILABLE_CORES, DEFAULT_CORES  # noqa: E402
-from ui.pipeline import format_summary, run_full_pipeline  # noqa: E402
+from ui.pipeline import (  # noqa: E402
+    ERROR_REPORT, REVIEW_REPORT, Cancelled, PipelineResult, format_summary, run_full_pipeline,
+)
 
 
 # ── Design tokens ────────────────────────────────────────────────────────────
@@ -95,6 +97,25 @@ ERROR    = "#E5534B"   # error red
 TEXT     = "#E2E6F0"   # primary text
 MUTED    = "#4E5568"   # secondary text
 HINT     = "#353A4E"   # placeholder / hint
+
+
+def done_status(result: PipelineResult) -> tuple[str, str, str]:
+    """Estado final de un lote: (icono "ok" | "error", título, detalle)."""
+    summary = format_summary(result)
+    if result.errors:
+        return ("error", "Proceso completado con errores",
+                f"{summary}\n{len(result.errors)} archivo(s) sin procesar · ver {ERROR_REPORT}")
+    if result.review:
+        return ("error", "Proceso completado: revisa algunos archivos",
+                f"{summary}\nver {REVIEW_REPORT}")
+    return ("ok", "Proceso completado", summary)
+
+
+def failure_status(exc: BaseException) -> tuple[str, str, str]:
+    """Estado tras una excepción: cancelado (sin icono) o error con su mensaje."""
+    if isinstance(exc, Cancelled):
+        return ("none", "Proceso cancelado", "")
+    return ("error", "Error al procesar", (str(exc) or type(exc).__name__)[:80])
 
 
 def _disclaimer_text() -> str:
@@ -330,7 +351,7 @@ async def main(page: ft.Page) -> None:
             "1. Selecciona la carpeta con los PDFs que deseas procesar haciendo clic en el botón 'Buscar' de la primera casilla.\n\n"
             "2. Selecciona la carpeta de salida (donde se guardarán los resultados en formato CSV) en la segunda casilla.\n\n"
             "3. (Opcional) En Ajustes (el engrane arriba a la derecha) mueve la barra de núcleos para usar más núcleos y procesar más rápido, o menos para dejar libre el equipo. Por defecto usa cerca del 70 % de los núcleos para no saturar el equipo.\n\n"
-            "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas.\n\n"
+            "4. Haz clic en el botón 'Procesar' para iniciar la extracción. Al terminar verás cuántos archivos se clasificaron y cuántos fueron altas y bajas. Los PDFs que no se pudieron leer se listan en _errores.csv y los CSV sin nombre o sin número de oficio en _revisar.csv, para revisarlos a mano.\n\n"
             "5. Si deseas detener la extracción en cualquier momento, puedes usar el botón rojo 'Cancelar proceso' que aparecerá debajo del indicador de progreso.\n\n"
             "6. Para cerrar la aplicación de manera segura y asegurarte de terminar todos los subprocesos de fondo, haz clic en el botón 'Salir'."
         )
@@ -484,9 +505,9 @@ async def main(page: ft.Page) -> None:
             try:
                 result = run_full_pipeline(input_folder[0], output_folder[0], _progress_cb,
                                            cancel_event, workers=cores[0])
-                page.run_task(_set_done, len(result.errors), format_summary(result))
+                page.run_task(_show_status, *done_status(result))
             except Exception as exc:
-                page.run_task(_set_error, str(exc))
+                page.run_task(_show_status, *failure_status(exc))
 
         threading.Thread(target=_work, daemon=True).start()
 
@@ -497,29 +518,12 @@ async def main(page: ft.Page) -> None:
         btn_cancel.visible    = False
         progress_ring.visible = False
 
-    async def _set_done(n_errors: int = 0, summary: str = "") -> None:
+    async def _show_status(icon: str, title: str, detail: str) -> None:
         _unlock()
-        if n_errors:
-            error_icon.visible = True
-            file_lbl.value     = "Proceso completado con errores"
-            sub_lbl.value      = f"{summary}\n{n_errors} archivo(s) sin procesar · ver _errores.csv"
-        else:
-            check_icon.visible = True
-            file_lbl.value     = "Proceso completado"
-            sub_lbl.value      = summary
-        page.update()
-
-    async def _set_error(msg: str) -> None:
-        _unlock()
-        if "Proceso cancelado" in msg:
-            check_icon.visible = False
-            error_icon.visible = False
-            file_lbl.value     = "Proceso cancelado"
-            sub_lbl.value      = ""
-        else:
-            error_icon.visible = True
-            file_lbl.value     = "Error al procesar"
-            sub_lbl.value      = str(msg)[:80]
+        check_icon.visible = icon == "ok"
+        error_icon.visible = icon == "error"
+        file_lbl.value     = title
+        sub_lbl.value      = detail
         page.update()
 
     btn_run.on_click = lambda e: page.run_task(_on_run, e)

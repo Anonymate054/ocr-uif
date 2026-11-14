@@ -149,6 +149,18 @@ def recognize(engine, image: np.ndarray) -> str:
     return "\n".join(item[1] for item in result) if result else ""
 
 
+def write_cache(cache_path: Path, text: str) -> None:
+    """Escribe la transcripción de forma atómica: primero a un temporal y luego
+    se renombra. Si la app se cierra a la mitad, no queda un texto truncado que
+    se reutilizaría para siempre (la clave es el hash del PDF)."""
+    tmp = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, cache_path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def ocr_pdf(engine, filename: str, path: Path, cache_dir: Path) -> OcrResult:
     """OCR de un PDF, usando la caché si ya se leyó antes. Nunca lanza excepción:
     los fallos vuelven en OcrResult.error."""
@@ -159,7 +171,7 @@ def ocr_pdf(engine, filename: str, path: Path, cache_dir: Path) -> OcrResult:
         text = recognize(engine, render_first_page(path))
         if not text.strip():
             raise ValueError("el OCR no encontró texto en la primera página")
-        cache_path.write_text(text, encoding="utf-8")
+        write_cache(cache_path, text)
         return OcrResult(filename, path, text)
     except Exception as exc:  # cualquier fallo de un archivo no detiene el lote
         return OcrResult(filename, path, error=str(exc) or type(exc).__name__)

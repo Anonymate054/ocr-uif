@@ -210,7 +210,7 @@ def main(total_samples=60000):
     val_data = samples[n_train:n_train + n_val]
     test_data = samples[n_train + n_val:]
     
-    print(f"\nDistribución del Dataset:")
+    print("\nDistribución del Dataset:")
     print(f"  - Train: {len(train_data)} secuencias")
     print(f"  - Val:   {len(val_data)} secuencias")
     print(f"  - Test:  {len(test_data)} secuencias")

@@ -1,7 +1,6 @@
 """Clasificador ALTA/BAJA: etiquetado para entrenar, entrenamiento y modelo publicado."""
 
 import re
-from pathlib import Path
 
 import joblib
 import pytest

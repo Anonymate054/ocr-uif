@@ -2,7 +2,6 @@ import os
 import json
 import time
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForTokenClassification, get_linear_schedule_with_warmup
 import onnxruntime as ort
